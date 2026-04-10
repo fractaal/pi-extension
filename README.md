@@ -35,28 +35,15 @@ pi install ./packages/idle-screensaver
 pi install ./packages/todo-write
 ```
 
-## npm publish flow
-
-Use the workspace scripts from repo root:
+## Install from npm
 
 ```bash
-pnpm run publish:dry-run
-pnpm run publish:all
-pnpm run publish:ask-user-question
-pnpm run publish:generative-ui
+pi install npm:@ryan_nookpi/pi-extension-ask-user-question
+pi install npm:@ryan_nookpi/pi-extension-auto-name
+pi install npm:@ryan_nookpi/pi-extension-clipboard
+pi install npm:@ryan_nookpi/pi-extension-codex-fast-mode
+pi install npm:@ryan_nookpi/pi-extension-delayed-action
+pi install npm:@ryan_nookpi/pi-extension-generative-ui
+pi install npm:@ryan_nookpi/pi-extension-idle-screensaver
+pi install npm:@ryan_nookpi/pi-extension-todo-write
 ```
-
-After publish, users can install with:
-
-```bash
-pi install npm:@jonghakseo/pi-extension-ask-user-question
-pi install npm:@jonghakseo/pi-extension-auto-name
-pi install npm:@jonghakseo/pi-extension-clipboard
-pi install npm:@jonghakseo/pi-extension-codex-fast-mode
-pi install npm:@jonghakseo/pi-extension-delayed-action
-pi install npm:@jonghakseo/pi-extension-generative-ui
-pi install npm:@jonghakseo/pi-extension-idle-screensaver
-pi install npm:@jonghakseo/pi-extension-todo-write
-```
-
-> npm package/scope names should be lowercase, so the scope is set to `@jonghakseo`.
