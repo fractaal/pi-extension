@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"allowImportingTsExtensions": true,
+		"strict": true,
+		"noEmit": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
+		"allowSyntheticDefaultImports": true,
+		"types": ["node", "vitest/globals"]
+	},
+	"include": ["packages/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+}

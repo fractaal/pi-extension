@@ -20,6 +20,22 @@ packages/
 
 This repository uses pnpm workspaces for local management and npm-compatible package manifests for publishing.
 
+## Quality gates
+
+This monorepo uses Biome as the single formatter/linter and Vitest for automated tests.
+
+```bash
+pnpm run biome:check
+pnpm run typecheck
+pnpm run test
+pnpm run verify
+```
+
+- `pnpm run biome:check`: format, lint, and import-order validation with Biome
+- `pnpm run typecheck`: TypeScript validation with `tsc --noEmit`
+- `pnpm run test`: run all extension tests with Vitest
+- `pnpm run verify`: run the full pre-publish gate (`biome + typecheck + test + workspace check`)
+
 ## Install from npm
 
 ```bash

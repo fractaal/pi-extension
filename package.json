@@ -1,24 +1,41 @@
 {
-  "name": "pi-extension-monorepo",
-  "private": true,
-  "version": "0.1.0",
-  "description": "Monorepo for standalone pi extensions published as separate npm packages.",
-  "packageManager": "pnpm@10.24.0",
-  "workspaces": [
-    "packages/*"
-  ],
-  "scripts": {
-    "list": "pnpm -r --depth -1 list --json",
-    "check": "node scripts/check-workspace.mjs",
-    "publish:dry-run": "pnpm run check && pnpm -r --filter './packages/*' publish --dry-run --access public --no-git-checks",
-    "publish:all": "pnpm run check && pnpm -r --filter './packages/*' publish --access public --no-git-checks",
-    "publish:ask-user-question": "pnpm --filter @ryan_nookpi/pi-extension-ask-user-question publish --access public --no-git-checks",
-    "publish:auto-name": "pnpm --filter @ryan_nookpi/pi-extension-auto-name publish --access public --no-git-checks",
-    "publish:clipboard": "pnpm --filter @ryan_nookpi/pi-extension-clipboard publish --access public --no-git-checks",
-    "publish:codex-fast-mode": "pnpm --filter @ryan_nookpi/pi-extension-codex-fast-mode publish --access public --no-git-checks",
-    "publish:delayed-action": "pnpm --filter @ryan_nookpi/pi-extension-delayed-action publish --access public --no-git-checks",
-    "publish:generative-ui": "pnpm --filter @ryan_nookpi/pi-extension-generative-ui publish --access public --no-git-checks",
-    "publish:idle-screensaver": "pnpm --filter @ryan_nookpi/pi-extension-idle-screensaver publish --access public --no-git-checks",
-    "publish:todo-write": "pnpm --filter @ryan_nookpi/pi-extension-todo-write publish --access public --no-git-checks"
-  }
+	"name": "pi-extension-monorepo",
+	"private": true,
+	"version": "0.1.0",
+	"description": "Monorepo for standalone pi extensions published as separate npm packages.",
+	"type": "module",
+	"packageManager": "pnpm@10.24.0",
+	"workspaces": [
+		"packages/*"
+	],
+	"scripts": {
+		"list": "pnpm -r --depth -1 list --json",
+		"check": "node scripts/check-workspace.mjs",
+		"biome:check": "biome check .",
+		"biome:write": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"verify": "pnpm run biome:check && pnpm run typecheck && pnpm run test && pnpm run check",
+		"publish:dry-run": "pnpm run verify && pnpm -r --filter './packages/*' publish --dry-run --access public --no-git-checks",
+		"publish:all": "pnpm run verify && pnpm -r --filter './packages/*' publish --access public --no-git-checks",
+		"publish:ask-user-question": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-ask-user-question publish --access public --no-git-checks",
+		"publish:auto-name": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-auto-name publish --access public --no-git-checks",
+		"publish:clipboard": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-clipboard publish --access public --no-git-checks",
+		"publish:codex-fast-mode": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-codex-fast-mode publish --access public --no-git-checks",
+		"publish:delayed-action": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-delayed-action publish --access public --no-git-checks",
+		"publish:generative-ui": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-generative-ui publish --access public --no-git-checks",
+		"publish:idle-screensaver": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-idle-screensaver publish --access public --no-git-checks",
+		"publish:todo-write": "pnpm run verify && pnpm --filter @ryan_nookpi/pi-extension-todo-write publish --access public --no-git-checks"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.11",
+		"@mariozechner/pi-ai": "^0.66.1",
+		"@mariozechner/pi-coding-agent": "^0.66.1",
+		"@mariozechner/pi-tui": "^0.66.1",
+		"@sinclair/typebox": "^0.34.49",
+		"@types/node": "^25.6.0",
+		"typescript": "^6.0.2",
+		"vitest": "^4.1.4"
+	}
 }
