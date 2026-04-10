@@ -1,5 +1,5 @@
 {
-  "name": "@jonghakseo/pi-extension-todo-write",
+  "name": "@ryan_nookpi/pi-extension-todo-write",
   "version": "0.1.0",
   "description": "Todo write tool extension for pi.",
   "type": "module",

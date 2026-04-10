@@ -1,4 +1,4 @@
-# @jonghakseo/pi-extension-ask-user-question
+# @ryan_nookpi/pi-extension-ask-user-question
 
 Independent pi package for the `AskUserQuestion` extension.
 
@@ -6,7 +6,7 @@ Independent pi package for the `AskUserQuestion` extension.
 
 ```bash
 pi install /Users/creatrip/Documents/pi-extension/packages/ask-user-question
-pi install npm:@jonghakseo/pi-extension-ask-user-question
+pi install npm:@ryan_nookpi/pi-extension-ask-user-question
 ```
 
 ## What it provides

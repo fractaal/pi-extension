@@ -1,4 +1,4 @@
-# @jonghakseo/pi-extension-clipboard
+# @ryan_nookpi/pi-extension-clipboard
 
 Clipboard copy tool for pi using OSC52 escape sequences.
 
@@ -6,7 +6,7 @@ Clipboard copy tool for pi using OSC52 escape sequences.
 
 ```bash
 pi install /Users/creatrip/Documents/pi-extension/packages/clipboard
-pi install npm:@jonghakseo/pi-extension-clipboard
+pi install npm:@ryan_nookpi/pi-extension-clipboard
 ```
 
 ## What it provides

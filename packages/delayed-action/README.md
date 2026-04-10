@@ -1,4 +1,4 @@
-# @jonghakseo/pi-extension-delayed-action
+# @ryan_nookpi/pi-extension-delayed-action
 
 Standalone pi package for the `delayed-action` extension.
 
@@ -6,7 +6,7 @@ Standalone pi package for the `delayed-action` extension.
 
 ```bash
 pi install /Users/creatrip/Documents/pi-extension/packages/delayed-action
-pi install npm:@jonghakseo/pi-extension-delayed-action
+pi install npm:@ryan_nookpi/pi-extension-delayed-action
 ```
 
 ## Extension Entry

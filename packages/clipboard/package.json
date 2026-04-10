@@ -1,5 +1,5 @@
 {
-  "name": "@jonghakseo/pi-extension-clipboard",
+  "name": "@ryan_nookpi/pi-extension-clipboard",
   "version": "0.1.0",
   "description": "Clipboard copy tool extension for pi using OSC52 escape sequences.",
   "type": "module",

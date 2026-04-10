@@ -1,4 +1,4 @@
-# @jonghakseo/pi-extension-idle-screensaver
+# @ryan_nookpi/pi-extension-idle-screensaver
 
 Standalone pi extension package for the idle screensaver overlay.
 
@@ -6,7 +6,7 @@ Standalone pi extension package for the idle screensaver overlay.
 
 ```bash
 pi install /Users/creatrip/Documents/pi-extension/packages/idle-screensaver
-pi install npm:@jonghakseo/pi-extension-idle-screensaver
+pi install npm:@ryan_nookpi/pi-extension-idle-screensaver
 ```
 
 ## What it provides

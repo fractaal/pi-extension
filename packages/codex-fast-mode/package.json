@@ -1,5 +1,5 @@
 {
-  "name": "@jonghakseo/pi-extension-codex-fast-mode",
+  "name": "@ryan_nookpi/pi-extension-codex-fast-mode",
   "version": "0.1.0",
   "description": "Codex fast mode extension for pi.",
   "type": "module",

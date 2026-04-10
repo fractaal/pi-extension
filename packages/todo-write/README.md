@@ -1,4 +1,4 @@
-# @jonghakseo/pi-extension-todo-write
+# @ryan_nookpi/pi-extension-todo-write
 
 Independent pi package for the `todo_write` extension.
 
@@ -6,7 +6,7 @@ Independent pi package for the `todo_write` extension.
 
 ```bash
 pi install /Users/creatrip/Documents/pi-extension/packages/todo-write
-pi install npm:@jonghakseo/pi-extension-todo-write
+pi install npm:@ryan_nookpi/pi-extension-todo-write
 ```
 
 ## What it provides

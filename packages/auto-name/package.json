@@ -1,5 +1,5 @@
 {
-  "name": "@jonghakseo/pi-extension-auto-name",
+  "name": "@ryan_nookpi/pi-extension-auto-name",
   "version": "0.1.0",
   "description": "Auto session name extension for pi.",
   "type": "module",

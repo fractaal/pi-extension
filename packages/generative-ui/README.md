@@ -1,4 +1,4 @@
-# @jonghakseo/pi-extension-generative-ui
+# @ryan_nookpi/pi-extension-generative-ui
 
 Generative UI widget extension for pi.
 
@@ -6,7 +6,7 @@ Generative UI widget extension for pi.
 
 ```bash
 pi install /Users/creatrip/Documents/pi-extension/packages/generative-ui
-pi install npm:@jonghakseo/pi-extension-generative-ui
+pi install npm:@ryan_nookpi/pi-extension-generative-ui
 ```
 
 ## What it provides

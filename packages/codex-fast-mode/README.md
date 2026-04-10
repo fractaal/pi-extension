@@ -1,4 +1,4 @@
-# @jonghakseo/pi-extension-codex-fast-mode
+# @ryan_nookpi/pi-extension-codex-fast-mode
 
 Codex fast mode extension for pi.
 
@@ -6,7 +6,7 @@ Codex fast mode extension for pi.
 
 ```bash
 pi install /Users/creatrip/Documents/pi-extension/packages/codex-fast-mode
-pi install npm:@jonghakseo/pi-extension-codex-fast-mode
+pi install npm:@ryan_nookpi/pi-extension-codex-fast-mode
 ```
 
 ## What it provides
