@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VENDOR_DIR = join(__dirname, "vendor", "system-prompts");
@@ -123,6 +124,13 @@ export function wrapSystemPromptAsReminder(systemPrompt: string): string {
 }
 
 export default function ccSystemPrompt(pi: ExtensionAPI) {
+	pi.registerMessageRenderer(REMINDER_CUSTOM_TYPE, (_message, { expanded }, theme) => {
+		if (!expanded) {
+			return new Text(theme.fg("dim", "▸ Claude Code system prompt injected"), 0, 0);
+		}
+		return undefined;
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		const modelId = ctx.model?.id;
 		if (!shouldApply(modelId)) return;
