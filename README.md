@@ -15,6 +15,7 @@ packages/
   codex-fast-mode/
   cross-agent/
   delayed-action/
+  diff-review/
   generative-ui/
   idle-screensaver/
   memory-layer/
@@ -89,6 +90,7 @@ pi install npm:@ryan_nookpi/pi-extension-clipboard
 pi install npm:@ryan_nookpi/pi-extension-codex-fast-mode
 pi install npm:@ryan_nookpi/pi-extension-cross-agent
 pi install npm:@ryan_nookpi/pi-extension-delayed-action
+pi install npm:@ryan_nookpi/pi-extension-diff-review
 pi install npm:@ryan_nookpi/pi-extension-generative-ui
 pi install npm:@ryan_nookpi/pi-extension-idle-screensaver
 pi install npm:@ryan_nookpi/pi-extension-memory-layer

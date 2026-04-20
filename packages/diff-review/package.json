@@ -1,0 +1,40 @@
+{
+	"name": "@ryan_nookpi/pi-extension-diff-review",
+	"version": "0.1.0",
+	"description": "Native diff review window extension for pi.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Jonghakseo/pi-extension.git",
+		"directory": "packages/diff-review"
+	},
+	"bugs": {
+		"url": "https://github.com/Jonghakseo/pi-extension/issues"
+	},
+	"homepage": "https://github.com/Jonghakseo/pi-extension/tree/main/packages/diff-review#readme",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"files": [
+		"*.ts",
+		"assets",
+		"README.md",
+		"types",
+		"web"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-coding-agent": "*"
+	},
+	"dependencies": {
+		"glimpseui": "^0.6.2"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}
