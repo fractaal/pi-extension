@@ -31,6 +31,7 @@
 		"publish:clipboard": "pnpm run verify:strict && pnpm --filter @ryan_nookpi/pi-extension-clipboard publish --access public --no-git-checks",
 		"publish:cc-system-prompt": "pnpm run verify:strict && pnpm --filter @ryan_nookpi/pi-extension-cc-system-prompt publish --access public --no-git-checks",
 		"publish:codex-fast-mode": "pnpm run verify:strict && pnpm --filter @ryan_nookpi/pi-extension-codex-fast-mode publish --access public --no-git-checks",
+		"publish:codex-large-context": "pnpm run verify:strict && pnpm --filter @ryan_nookpi/pi-extension-codex-large-context publish --access public --no-git-checks",
 		"publish:delayed-action": "pnpm run verify:strict && pnpm --filter @ryan_nookpi/pi-extension-delayed-action publish --access public --no-git-checks",
 		"publish:generative-ui": "pnpm run verify:strict && pnpm --filter @ryan_nookpi/pi-extension-generative-ui publish --access public --no-git-checks",
 		"publish:idle-screensaver": "pnpm run verify:strict && pnpm --filter @ryan_nookpi/pi-extension-idle-screensaver publish --access public --no-git-checks",

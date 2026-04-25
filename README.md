@@ -14,6 +14,7 @@ packages/
   claude-spinner/
   clipboard/
   codex-fast-mode/
+  codex-large-context/
   cross-agent/
   delayed-action/
   diff-review/
@@ -90,6 +91,7 @@ pi install npm:@ryan_nookpi/pi-extension-claude-mcp-bridge
 pi install npm:@ryan_nookpi/pi-extension-claude-spinner
 pi install npm:@ryan_nookpi/pi-extension-clipboard
 pi install npm:@ryan_nookpi/pi-extension-codex-fast-mode
+pi install npm:@ryan_nookpi/pi-extension-codex-large-context
 pi install npm:@ryan_nookpi/pi-extension-cross-agent
 pi install npm:@ryan_nookpi/pi-extension-delayed-action
 pi install npm:@ryan_nookpi/pi-extension-diff-review
