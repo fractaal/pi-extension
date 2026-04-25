@@ -1,0 +1,39 @@
+{
+	"name": "@ryan_nookpi/pi-extension-todo-write-overlay",
+	"version": "0.1.1",
+	"description": "Top-right overlay todo_write tool extension for pi.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Jonghakseo/pi-extension.git",
+		"directory": "packages/todo-write-overlay"
+	},
+	"bugs": {
+		"url": "https://github.com/Jonghakseo/pi-extension/issues"
+	},
+	"homepage": "https://github.com/Jonghakseo/pi-extension/tree/main/packages/todo-write-overlay#readme",
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"files": [
+		"index.ts",
+		"README.md",
+		"assets/todo-overlay-chat.png",
+		"assets/todo-overlay-progress.png"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-ai": "*",
+		"@mariozechner/pi-coding-agent": "*",
+		"@mariozechner/pi-tui": "*",
+		"@sinclair/typebox": "*"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}
