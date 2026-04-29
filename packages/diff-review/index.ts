@@ -17,6 +17,7 @@ import type {
 	ReviewWindowMessage,
 } from "./types.js";
 import { buildReviewHtml } from "./ui.js";
+import { createRepoChangeWatcher, type RepoChangeWatcher } from "./watch.js";
 
 function isSubmitPayload(value: ReviewWindowMessage): value is ReviewSubmitPayload {
 	return value.type === "submit";
@@ -61,12 +62,20 @@ function appendReviewPrompt(ctx: ExtensionCommandContext, prompt: string): void 
 
 export default function (pi: ExtensionAPI) {
 	let activeWindow: QuietGlimpseWindow | null = null;
+	let activeWatcher: RepoChangeWatcher | null = null;
 	const suppressedWindows = new WeakSet<QuietGlimpseWindow>();
+
+	function stopActiveWatcher(): void {
+		if (activeWatcher == null) return;
+		activeWatcher.dispose();
+		activeWatcher = null;
+	}
 
 	function closeActiveWindow(options: { suppressResults?: boolean } = {}): void {
 		if (activeWindow == null) return;
 		const windowToClose = activeWindow;
 		activeWindow = null;
+		stopActiveWatcher();
 		if (options.suppressResults) {
 			suppressedWindows.add(windowToClose);
 		}
@@ -116,6 +125,21 @@ export default function (pi: ExtensionAPI) {
 				window.send(`window.__reviewReceive(${payload});`);
 			};
 
+			let watcherWarningShown = false;
+			activeWatcher = createRepoChangeWatcher(
+				repoRoot,
+				() => {
+					sendWindowMessage({ type: "working-tree-changed", changedAt: Date.now() });
+				},
+				{
+					onError: (error) => {
+						if (watcherWarningShown || activeWindow !== window) return;
+						watcherWarningShown = true;
+						ctx.ui.notify(`Review change watcher failed: ${error.message}`, "warning");
+					},
+				},
+			);
+
 			const loadCommitFiles = (sha: string): Promise<ReviewFile[]> => {
 				const cached = commitFileCache.get(sha);
 				if (cached != null) return cached;
@@ -158,6 +182,7 @@ export default function (pi: ExtensionAPI) {
 						window.removeListener("error", onError);
 						if (activeWindow === window) {
 							activeWindow = null;
+							stopActiveWatcher();
 						}
 					};
 
@@ -233,18 +258,28 @@ export default function (pi: ExtensionAPI) {
 					};
 
 					const handleRequestReviewData = async (message: ReviewRequestReviewDataPayload): Promise<void> => {
-						clearRefreshableCaches();
-						reviewData = await getReviewWindowData(pi, repoRoot);
-						for (const file of reviewData.files) fileMap.set(file.id, file);
-						sendWindowMessage({
-							type: "review-data",
-							requestId: message.requestId,
-							files: reviewData.files,
-							commits: reviewData.commits,
-							branchBaseRef: reviewData.branchBaseRef,
-							branchMergeBaseSha: reviewData.branchMergeBaseSha,
-							repositoryHasHead: reviewData.repositoryHasHead,
-						});
+						try {
+							const nextReviewData = await getReviewWindowData(pi, repoRoot);
+							clearRefreshableCaches();
+							reviewData = nextReviewData;
+							for (const file of reviewData.files) fileMap.set(file.id, file);
+							sendWindowMessage({
+								type: "review-data",
+								requestId: message.requestId,
+								files: reviewData.files,
+								commits: reviewData.commits,
+								branchBaseRef: reviewData.branchBaseRef,
+								branchMergeBaseSha: reviewData.branchMergeBaseSha,
+								repositoryHasHead: reviewData.repositoryHasHead,
+							});
+						} catch (error) {
+							const messageText = error instanceof Error ? error.message : String(error);
+							sendWindowMessage({
+								type: "review-data-error",
+								requestId: message.requestId,
+								message: messageText,
+							});
+						}
 					};
 
 					const handleClipboardRead = (message: ReviewClipboardReadPayload): void => {

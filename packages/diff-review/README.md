@@ -17,6 +17,7 @@ pi install npm:@ryan_nookpi/pi-extension-diff-review
 - registers the `/diff-review` command
 - opens a native review window for the current git repository
 - supports branch, per-commit, and all-files review scopes
+- detects local file changes while the review window is open and offers a manual refresh without polling
 - lets you leave overall comments and file/line comments
 - appends the collected feedback back into the pi editor as a follow-up prompt
 

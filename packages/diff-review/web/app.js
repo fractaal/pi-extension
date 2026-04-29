@@ -18,6 +18,7 @@ const state = {
 	commitRequestIds: {}, // sha -> requestId (in-flight)
 	commitErrors: {}, // sha -> error message
 	reviewDataRequestId: null,
+	reviewDataRequestStartedAt: null,
 	comments: [],
 	overallComment: "",
 	hideUnchanged: true,
@@ -31,6 +32,9 @@ const state = {
 	fileErrors: {},
 	pendingRequestIds: {},
 	lastWorkingTreeLoadAt: null,
+	localChangesDetected: false,
+	lastLocalChangeDetectedAt: null,
+	lastLocalChangeObservedAt: null,
 };
 
 const sidebarEl = document.getElementById("sidebar");
@@ -50,7 +54,7 @@ const currentFileLabelEl = document.getElementById("current-file-label");
 const modeHintEl = document.getElementById("mode-hint");
 const fileCommentsContainer = document.getElementById("file-comments-container");
 const editorContainerEl = document.getElementById("editor-container");
-const refreshWorkingTreeButton = document.getElementById("refresh-working-tree-button");
+const refreshReviewButton = document.getElementById("refresh-review-button");
 const submitButton = document.getElementById("submit-button");
 const cancelButton = document.getElementById("cancel-button");
 const overallCommentButton = document.getElementById("overall-comment-button");
@@ -156,6 +160,9 @@ function isSelectedWorkingTreeCommit() {
 }
 
 function scopeHint(scope) {
+	if (state.localChangesDetected) {
+		return "Local file changes detected. Click Refresh changes to reload the diff when you are ready.";
+	}
 	const baseRefLabel = reviewData.branchBaseRef || "the selected base";
 	switch (scope) {
 		case "branch":
@@ -165,8 +172,8 @@ function scopeHint(scope) {
 			if (!info) return "Pick a branch commit from the list to review its diff.";
 			if (info.kind === "working-tree") {
 				return hasRepositoryHead()
-					? "Review uncommitted working tree changes against HEAD. This is a live view — outside edits will not appear here until you refresh."
-					: "Review uncommitted working tree changes against the empty tree in this new repository. This is a live view — outside edits will not appear here until you refresh.";
+					? "Review uncommitted working tree changes against HEAD. Use Refresh changes when local edits are detected."
+					: "Review uncommitted working tree changes against the empty tree in this new repository. Use Refresh changes when local edits are detected.";
 			}
 			return `Review commit ${info.shortSha} — ${info.subject}`;
 		}
@@ -639,27 +646,41 @@ function formatWorkingTreeLoadLabel(timestamp) {
 	return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
 }
 
-function updateWorkingTreeRefreshButton() {
-	if (!refreshWorkingTreeButton) return;
-	if (state.currentScope !== "commits") {
-		refreshWorkingTreeButton.style.display = "none";
-		refreshWorkingTreeButton.disabled = true;
+function formatLocalChangeLabel(timestamp) {
+	if (!timestamp) return "just now";
+	const date = new Date(timestamp);
+	if (Number.isNaN(date.getTime())) return "just now";
+	return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+function updateReviewRefreshButton() {
+	if (!refreshReviewButton) return;
+	const shouldShow = state.localChangesDetected || state.currentScope === "commits";
+	if (!shouldShow) {
+		refreshReviewButton.style.display = "none";
+		refreshReviewButton.disabled = true;
 		return;
 	}
-	const sha = state.selectedCommitSha;
+	const sha = state.currentScope === "commits" ? state.selectedCommitSha : null;
 	const commitLoading = sha ? state.commitRequestIds[sha] != null : false;
 	const reviewDataLoading = state.reviewDataRequestId != null;
 	const loading = commitLoading || reviewDataLoading;
-	refreshWorkingTreeButton.style.display = "inline-flex";
-	refreshWorkingTreeButton.disabled = loading;
-	refreshWorkingTreeButton.textContent = loading
+	refreshReviewButton.style.display = "inline-flex";
+	refreshReviewButton.disabled = loading;
+	refreshReviewButton.style.borderColor = state.localChangesDetected && !loading ? "rgba(210,153,34,0.65)" : "";
+	refreshReviewButton.style.color = state.localChangesDetected && !loading ? "#d29922" : "";
+	refreshReviewButton.textContent = loading
 		? "Refreshing…"
+		: state.localChangesDetected
+			? "Changes detected · Refresh"
+			: isSelectedWorkingTreeCommit()
+				? "Refresh live diff"
+				: "Refresh review";
+	refreshReviewButton.title = state.localChangesDetected
+		? `Local file changes detected at ${formatLocalChangeLabel(state.lastLocalChangeDetectedAt)}. Click to reload review data.`
 		: isSelectedWorkingTreeCommit()
-			? "Refresh live diff"
-			: "Refresh commits view";
-	refreshWorkingTreeButton.title = isSelectedWorkingTreeCommit()
-		? `Live working tree. Outside edits will not appear until you refresh. Last loaded ${formatWorkingTreeLoadLabel(state.lastWorkingTreeLoadAt)}.`
-		: "Refresh the commits list to detect new or cleared uncommitted changes.";
+			? `Working tree diff. Last loaded ${formatWorkingTreeLoadLabel(state.lastWorkingTreeLoadAt)}.`
+			: "Refresh review data for all scopes.";
 }
 
 function clearFileRequestStateByPrefixes(prefixes) {
@@ -712,23 +733,15 @@ function clearWorkingTreeCommitState() {
 function requestLatestReviewData() {
 	if (!window.glimpse?.send) return;
 	if (state.reviewDataRequestId != null) return;
-	const requestId = `review-data-request:${Date.now()}:${++requestSequence}`;
+	const requestStartedAt = Date.now();
+	const requestId = `review-data-request:${requestStartedAt}:${++requestSequence}`;
 	state.reviewDataRequestId = requestId;
-	updateWorkingTreeRefreshButton();
+	state.reviewDataRequestStartedAt = requestStartedAt;
+	updateReviewRefreshButton();
 	window.glimpse.send({ type: "request-review-data", requestId });
 }
 
-function refreshCommitsView() {
-	if (state.currentScope !== "commits") return;
-	clearRefreshableFileState();
-	clearWorkingTreeCommitState();
-	state.lastWorkingTreeLoadAt = null;
-	renderTree();
-	if (diffEditor && monacoApi) {
-		mountFile({ preserveScroll: true });
-	} else {
-		renderFileComments();
-	}
+function refreshReviewData() {
 	requestLatestReviewData();
 }
 
@@ -895,7 +908,7 @@ function renderCommitList() {
 	commitListEl.innerHTML = "";
 	if (reviewData.commits.length === 0) {
 		commitListEl.innerHTML = '<div class="px-3 py-2 text-[11px] text-review-muted">No commits to review.</div>';
-		updateWorkingTreeRefreshButton();
+		updateReviewRefreshButton();
 		return;
 	}
 	for (const commit of reviewData.commits) {
@@ -925,7 +938,7 @@ function renderCommitList() {
 		row.addEventListener("click", () => selectCommit(commit.sha));
 		commitListEl.appendChild(row);
 	}
-	updateWorkingTreeRefreshButton();
+	updateReviewRefreshButton();
 }
 
 function selectCommit(sha) {
@@ -959,7 +972,7 @@ function updateToggleButtons() {
 		: "Show changed areas only";
 	toggleUnchangedButton.style.display = !usesBinaryPreview && activeFileShowsDiff() ? "inline-flex" : "none";
 	updateScopeButtons();
-	updateWorkingTreeRefreshButton();
+	updateReviewRefreshButton();
 	modeHintEl.textContent = currentModeHint();
 	submitButton.disabled = false;
 	updateFileHeaderMeta(file);
@@ -1014,7 +1027,8 @@ function renderTree() {
 	const comments = state.comments.length;
 	const filteredSuffix = state.fileFilter.trim() ? ` • ${visibleFiles.length} shown` : "";
 	const liveSuffix = isSelectedWorkingTreeCommit() ? " • live working tree" : "";
-	summaryEl.textContent = `${scopedFiles.length} file(s) • ${comments} comment(s)${state.overallComment ? " • overall note" : ""}${filteredSuffix}${liveSuffix}`;
+	const staleSuffix = state.localChangesDetected ? " • local changes detected" : "";
+	summaryEl.textContent = `${scopedFiles.length} file(s) • ${comments} comment(s)${state.overallComment ? " • overall note" : ""}${filteredSuffix}${liveSuffix}${staleSuffix}`;
 	updateToggleButtons();
 	updateSidebarLayout();
 }
@@ -1680,14 +1694,36 @@ window.__reviewReceive = (message) => {
 		return;
 	}
 
+	if (message.type === "working-tree-changed") {
+		const observedAt = Date.now();
+		state.localChangesDetected = true;
+		state.lastLocalChangeDetectedAt = message.changedAt ?? observedAt;
+		state.lastLocalChangeObservedAt = observedAt;
+		renderTree();
+		return;
+	}
+
 	if (message.type === "review-data") {
 		if (state.reviewDataRequestId !== message.requestId) return;
+		clearRefreshableFileState();
+		clearWorkingTreeCommitState();
 		reviewData.files = Array.isArray(message.files) ? message.files : [];
 		reviewData.commits = Array.isArray(message.commits) ? message.commits : [];
 		reviewData.branchBaseRef = message.branchBaseRef ?? null;
 		reviewData.branchMergeBaseSha = message.branchMergeBaseSha ?? null;
 		reviewData.repositoryHasHead = message.repositoryHasHead === true;
+		const requestStartedAt = state.reviewDataRequestStartedAt;
 		state.reviewDataRequestId = null;
+		state.reviewDataRequestStartedAt = null;
+		state.lastWorkingTreeLoadAt = null;
+		const localChangeAfterRequest =
+			requestStartedAt == null ||
+			(state.lastLocalChangeObservedAt != null && state.lastLocalChangeObservedAt > requestStartedAt);
+		if (!localChangeAfterRequest) {
+			state.localChangesDetected = false;
+			state.lastLocalChangeDetectedAt = null;
+			state.lastLocalChangeObservedAt = null;
+		}
 		if (!reviewData.commits.some((commit) => commit.sha === state.selectedCommitSha)) {
 			state.selectedCommitSha = reviewData.commits[0]?.sha ?? null;
 		}
@@ -1698,6 +1734,15 @@ window.__reviewReceive = (message) => {
 				forceRefresh: isWorkingTreeCommit(state.selectedCommitSha),
 			});
 		}
+		return;
+	}
+
+	if (message.type === "review-data-error") {
+		if (state.reviewDataRequestId !== message.requestId) return;
+		state.reviewDataRequestId = null;
+		state.reviewDataRequestStartedAt = null;
+		updateReviewRefreshButton();
+		alert(`Failed to refresh review data: ${message.message || "Unknown error"}`);
 		return;
 	}
 
@@ -1728,7 +1773,7 @@ window.__reviewReceive = (message) => {
 		state.commitErrors[message.sha] = message.message || "Unknown error";
 		delete state.commitRequestIds[message.sha];
 		renderCommitList();
-		updateWorkingTreeRefreshButton();
+		updateReviewRefreshButton();
 		return;
 	}
 
@@ -1883,9 +1928,9 @@ fileCommentButton.addEventListener("click", () => {
 	showFileCommentPopover();
 });
 
-if (refreshWorkingTreeButton) {
-	refreshWorkingTreeButton.addEventListener("click", () => {
-		refreshCommitsView();
+if (refreshReviewButton) {
+	refreshReviewButton.addEventListener("click", () => {
+		refreshReviewData();
 	});
 }
 

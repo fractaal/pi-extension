@@ -164,11 +164,22 @@ export interface ReviewReviewDataMessage {
 	repositoryHasHead: boolean;
 }
 
+export interface ReviewReviewDataErrorMessage {
+	type: "review-data-error";
+	requestId: string;
+	message: string;
+}
+
 export interface ReviewClipboardDataMessage {
 	type: "clipboard-data";
 	requestId: string;
 	text: string;
 	message?: string;
+}
+
+export interface ReviewWorkingTreeChangedMessage {
+	type: "working-tree-changed";
+	changedAt: number;
 }
 
 export type ReviewHostMessage =
@@ -177,7 +188,9 @@ export type ReviewHostMessage =
 	| ReviewCommitDataMessage
 	| ReviewCommitErrorMessage
 	| ReviewReviewDataMessage
-	| ReviewClipboardDataMessage;
+	| ReviewReviewDataErrorMessage
+	| ReviewClipboardDataMessage
+	| ReviewWorkingTreeChangedMessage;
 
 export interface ReviewWindowData {
 	repoRoot: string;
