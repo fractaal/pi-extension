@@ -280,8 +280,7 @@ class McpManager {
 	private connections = new Map<string, McpConnection>();
 	public sourcePath: string | null = null;
 
-	async replaceServers(servers: NormalizedMcpServer[], sourcePath: string | null): Promise<void> {
-		await this.disconnectAll();
+	setServers(servers: NormalizedMcpServer[], sourcePath: string | null): void {
 		this.connections.clear();
 		for (const server of servers) {
 			this.connections.set(server.name, new McpConnection(server));
@@ -289,11 +288,18 @@ class McpManager {
 		this.sourcePath = sourcePath;
 	}
 
-	async connectAll(): Promise<void> {
-		for (const conn of this.connections.values()) {
-			if (!conn.server.enabled) continue;
+	async replaceServers(servers: NormalizedMcpServer[], sourcePath: string | null): Promise<void> {
+		await this.disconnectAll();
+		this.setServers(servers, sourcePath);
+	}
+
+	async connectAll(onAfterConnection?: () => void): Promise<void> {
+		const tasks = Array.from(this.connections.values()).map(async (conn) => {
+			if (!conn.server.enabled) return;
 			await conn.connect();
-		}
+			onAfterConnection?.();
+		});
+		await Promise.all(tasks);
 	}
 
 	async disconnectAll(): Promise<void> {
@@ -1239,13 +1245,16 @@ class McpToolListOverlay {
 	}
 }
 
-export default async function claudeMcpBridge(pi: ExtensionAPI) {
+export default function claudeMcpBridge(pi: ExtensionAPI) {
 	const manager = new McpManager();
 	const registeredTools = new Set<string>();
 	let loadedAt: LoadedConfig = { sourcePath: null, servers: [], warnings: [] };
 	const loadedToolVisibility = loadToolVisibilitySettings();
 	const disabledToolKeys = loadedToolVisibility.disabledToolKeys;
 	let toolVisibilityWarning = loadedToolVisibility.warning;
+	let activeContext: ExtensionContext | undefined;
+	let loadGeneration = 0;
+	let shuttingDown = false;
 
 	function getOverlayWarnings(): string[] {
 		const warnings = [...loadedAt.warnings];
@@ -1518,20 +1527,44 @@ export default async function claudeMcpBridge(pi: ExtensionAPI) {
 		}
 	}
 
-	async function loadAndConnect(cwd: string): Promise<LoadedConfig> {
-		const loaded = loadConfig(cwd);
-		await manager.replaceServers(loaded.servers, loaded.sourcePath);
-		await manager.connectAll();
+	function refreshRuntimeState(generation: number): void {
+		if (shuttingDown || generation !== loadGeneration) return;
 		registerDiscoveredTools();
-		loadedAt = loaded;
-		return loaded;
+		removeDisabledToolsFromActiveSet();
+		if (activeContext) updateStatus(activeContext);
 	}
 
-	// IMPORTANT: register MCP tools during extension load so pi includes them in tool registry.
-	// NOTE(user-approved): 초기 연결 실패 시 재시도/도구 재등록 강화는 현재 동작을 유지한다.
-	await loadAndConnect(process.cwd());
+	function loadConfiguredServers(cwd: string): number {
+		const loaded = loadConfig(cwd);
+		loadedAt = loaded;
+		manager.setServers(loaded.servers, loaded.sourcePath);
+		const generation = ++loadGeneration;
+		refreshRuntimeState(generation);
+		return generation;
+	}
+
+	async function connectConfiguredServersInBackground(generation: number): Promise<void> {
+		try {
+			await manager.connectAll(() => refreshRuntimeState(generation));
+			refreshRuntimeState(generation);
+		} catch (error) {
+			if (shuttingDown || generation !== loadGeneration) return;
+			const message = error instanceof Error ? error.message : String(error);
+			toolVisibilityWarning = `MCP background startup failed: ${message}`;
+			if (activeContext?.hasUI) {
+				activeContext.ui.notify(`[claude-mcp-bridge] ${toolVisibilityWarning}`, "warning");
+			}
+		}
+	}
+
+	// Load config synchronously so /mcp-status and the footer know which servers exist,
+	// but do not await server connection/tool discovery during pi startup. Tools are
+	// registered dynamically as MCP servers finish connecting in the background.
+	const startupGeneration = loadConfiguredServers(process.cwd());
+	void connectConfiguredServersInBackground(startupGeneration);
 
 	pi.on("session_start", async (_event, ctx) => {
+		activeContext = ctx;
 		updateStatus(ctx);
 		removeDisabledToolsFromActiveSet();
 		if (toolVisibilityWarning && ctx.hasUI) {
@@ -1540,6 +1573,9 @@ export default async function claudeMcpBridge(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		shuttingDown = true;
+		loadGeneration++;
+		activeContext = undefined;
 		await manager.disconnectAll();
 	});
 

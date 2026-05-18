@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
+import { createExtensionApiMock } from "../../tests/mock-extension-api.ts";
+import claudeMcpBridge, {
 	buildPiToolName,
 	buildToolVisibilityKey,
 	createParameterSchema,
@@ -18,6 +22,34 @@ import {
 function envRef(name: string): string {
 	return `\${${name}}`;
 }
+
+// ---------------------------------------------------------------------------
+// extension startup
+// ---------------------------------------------------------------------------
+
+describe("claudeMcpBridge startup", () => {
+	it("registers commands without returning a startup-blocking promise", () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-bridge-test-"));
+		const configPath = path.join(tmpDir, "mcp.json");
+		const originalConfig = process.env.PI_MCP_CONFIG;
+		fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }), "utf-8");
+		process.env.PI_MCP_CONFIG = configPath;
+
+		try {
+			const mock = createExtensionApiMock();
+			const result = claudeMcpBridge(mock.api);
+
+			expect(result).toBeUndefined();
+			expect(mock.commands.has("mcp-status")).toBe(true);
+			expect(mock.getHandlers("session_start")).toHaveLength(1);
+			expect(mock.getHandlers("session_shutdown")).toHaveLength(1);
+		} finally {
+			if (originalConfig === undefined) delete process.env.PI_MCP_CONFIG;
+			else process.env.PI_MCP_CONFIG = originalConfig;
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+});
 
 // ---------------------------------------------------------------------------
 // sanitizeName — slug sanitization
