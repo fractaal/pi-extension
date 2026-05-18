@@ -61,6 +61,10 @@ class McpConnection {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Deduplicates concurrent connect() calls. */
 	private connectingPromise: Promise<void> | null = null;
+	/** Invalidates stale in-flight connection attempts after disconnect/reconnect. */
+	private connectionGeneration = 0;
+	/** Identifies the client/transport currently stored on this instance. */
+	private activeConnectionGeneration = 0;
 
 	public status: ServerStatus = "disconnected";
 	public error?: string;
@@ -73,16 +77,22 @@ class McpConnection {
 	async connect(): Promise<void> {
 		// Deduplicate concurrent connect() invocations.
 		if (this.connectingPromise) return this.connectingPromise;
-		this.connectingPromise = this._doConnect();
+		const generation = ++this.connectionGeneration;
+		const promise = this._doConnect(generation);
+		this.connectingPromise = promise;
 		try {
-			await this.connectingPromise;
+			await promise;
 		} finally {
-			this.connectingPromise = null;
+			if (this.connectingPromise === promise) {
+				this.connectingPromise = null;
+			}
 		}
 	}
 
 	async disconnect(): Promise<void> {
 		this.intentionalDisconnect = true;
+		this.connectionGeneration++;
+		this.connectingPromise = null;
 		this.clearReconnectTimer();
 		await this.cleanupConnection();
 
@@ -138,13 +148,18 @@ class McpConnection {
 
 	// ── internals ─────────────────────────────────────────────
 
-	private async _doConnect(): Promise<void> {
+	private isStaleConnection(generation: number): boolean {
+		return generation !== this.connectionGeneration || this.intentionalDisconnect;
+	}
+
+	private async _doConnect(generation: number): Promise<void> {
 		this.clearReconnectTimer();
 
 		// Guard: prevent the onclose handler of the *old* client from firing
 		// a spurious reconnect while we tear it down.
 		this.intentionalDisconnect = true;
 		await this.cleanupConnection();
+		if (generation !== this.connectionGeneration) return;
 		this.intentionalDisconnect = false;
 
 		this.status = "connecting";
@@ -152,10 +167,11 @@ class McpConnection {
 		this.tools = [];
 
 		try {
-			this.client = new Client({ name: "pi-claude-mcp-bridge", version: "0.1.0" }, { capabilities: {} });
+			const client = new Client({ name: "pi-claude-mcp-bridge", version: "0.1.0" }, { capabilities: {} });
+			let transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport;
 
 			if (this.server.type === "stdio") {
-				this.transport = new StdioClientTransport({
+				transport = new StdioClientTransport({
 					command: this.server.command,
 					args: this.server.args,
 					env: this.server.env,
@@ -166,7 +182,7 @@ class McpConnection {
 				});
 			} else if (this.server.type === "sse") {
 				const sseHeaders = this.server.headers;
-				this.transport = new SSEClientTransport(new URL(this.server.url), {
+				transport = new SSEClientTransport(new URL(this.server.url), {
 					// EventSourceInit does not support a headers property directly.
 					// Inject custom headers into the SSE stream via a fetch wrapper.
 					eventSourceInit:
@@ -182,45 +198,71 @@ class McpConnection {
 					requestInit: { headers: sseHeaders },
 				});
 			} else {
-				this.transport = new StreamableHTTPClientTransport(new URL(this.server.url), {
+				transport = new StreamableHTTPClientTransport(new URL(this.server.url), {
 					requestInit: { headers: this.server.headers },
 				});
 			}
 
-			await this.client.connect(this.transport);
+			this.client = client;
+			this.transport = transport;
+			this.activeConnectionGeneration = generation;
+
+			await client.connect(transport);
+			if (this.isStaleConnection(generation)) {
+				await this.cleanupConnection(generation);
+				return;
+			}
 
 			// ── Detect unexpected disconnection & auto-reconnect ──
-			this.client.onclose = () => {
-				if (this.intentionalDisconnect) return;
+			client.onclose = () => {
+				if (this.intentionalDisconnect || generation !== this.connectionGeneration) return;
 				this.status = "disconnected";
 				this.client = null;
 				this.transport = null;
+				this.activeConnectionGeneration = 0;
 				this.scheduleReconnect();
 			};
 
-			this.client.onerror = (error: Error) => {
-				if (this.intentionalDisconnect) return;
+			client.onerror = (error: Error) => {
+				if (this.intentionalDisconnect || generation !== this.connectionGeneration) return;
 				const msg = error instanceof Error ? error.message : String(error);
 				if (msg.includes("unknown message ID")) return; // harmless race; ignore
 				this.error = msg;
 			};
 
-			await this.refreshTools();
+			const result = await client.listTools();
+			if (this.isStaleConnection(generation)) {
+				await this.cleanupConnection(generation);
+				return;
+			}
+			this.tools = result.tools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				inputSchema: (tool.inputSchema ?? {}) as Record<string, unknown>,
+			}));
 			this.status = "connected";
 			this.reconnectAttempts = 0;
 		} catch (error) {
+			if (this.isStaleConnection(generation)) {
+				await this.cleanupConnection(generation);
+				return;
+			}
+
 			const message = error instanceof Error ? error.message : String(error);
 			// Clean up the half-initialised connection (guard the onclose handler).
 			this.intentionalDisconnect = true;
-			await this.cleanupConnection();
+			await this.cleanupConnection(generation);
 			this.intentionalDisconnect = false;
+			if (generation !== this.connectionGeneration) return;
 
 			this.status = "error";
 			this.error = message;
 		}
 	}
 
-	private async cleanupConnection(): Promise<void> {
+	private async cleanupConnection(generation?: number): Promise<void> {
+		if (generation !== undefined && this.activeConnectionGeneration !== generation) return;
+
 		if (this.client) {
 			try {
 				await this.client.close();
@@ -237,6 +279,7 @@ class McpConnection {
 			}
 			this.transport = null;
 		}
+		this.activeConnectionGeneration = 0;
 	}
 
 	private clearReconnectTimer(): void {
@@ -1254,6 +1297,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 	let toolVisibilityWarning = loadedToolVisibility.warning;
 	let activeContext: ExtensionContext | undefined;
 	let loadGeneration = 0;
+	let startupPromise: Promise<void> | undefined;
 	let shuttingDown = false;
 
 	function getOverlayWarnings(): string[] {
@@ -1561,7 +1605,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 	// but do not await server connection/tool discovery during pi startup. Tools are
 	// registered dynamically as MCP servers finish connecting in the background.
 	const startupGeneration = loadConfiguredServers(process.cwd());
-	void connectConfiguredServersInBackground(startupGeneration);
+	startupPromise = connectConfiguredServersInBackground(startupGeneration);
 
 	pi.on("session_start", async (_event, ctx) => {
 		activeContext = ctx;
@@ -1577,6 +1621,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 		loadGeneration++;
 		activeContext = undefined;
 		await manager.disconnectAll();
+		await startupPromise;
 	});
 
 	pi.registerCommand("mcp-status", {
