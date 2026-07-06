@@ -241,6 +241,48 @@ describe("MCP config management", () => {
 		}
 	});
 
+	it("blocks writes to read-only and ambiguous duplicate config targets", () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-bridge-block-test-"));
+		try {
+			const homeDir = path.join(tmpDir, "home");
+			fs.mkdirSync(homeDir, { recursive: true });
+			const projectConfig = path.join(tmpDir, ".mcp.json");
+			const homeConfig = path.join(homeDir, ".mcp.json");
+			fs.writeFileSync(
+				projectConfig,
+				JSON.stringify({ mcpServers: { alpha: { command: "project" }, locked: { command: "node" } } }),
+				"utf-8",
+			);
+			fs.writeFileSync(homeConfig, JSON.stringify({ mcpServers: { alpha: { command: "home" } } }), "utf-8");
+			fs.chmodSync(projectConfig, 0o444);
+
+			expect(() =>
+				upsertMcpServerConfig({
+					cwd: tmpDir,
+					name: "locked",
+					configPath: projectConfig,
+					server: { command: "node" },
+					options: { homeDir },
+				}),
+			).toThrow(/read-only/);
+			fs.chmodSync(projectConfig, 0o644);
+			expect(() =>
+				upsertMcpServerConfig({
+					cwd: tmpDir,
+					name: "alpha",
+					configPath: homeConfig,
+					server: { command: "node" },
+					options: { homeDir },
+				}),
+			).toThrow(/duplicate/);
+			expect(() =>
+				removeMcpServerConfig({ cwd: tmpDir, name: "alpha", configPath: homeConfig, options: { homeDir } }),
+			).toThrow(/duplicate/);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it("removes a server from the source config file that owns it", () => {
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-bridge-remove-test-"));
 		try {

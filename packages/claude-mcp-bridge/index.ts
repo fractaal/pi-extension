@@ -1042,11 +1042,42 @@ function writeJsonAtomic(filePath: string, value: unknown): void {
 	fs.renameSync(tmp, filePath);
 }
 
+function resolveConfigWriteTarget(configPath: string, state: McpBridgeConfigState): McpBridgeConfigSource | null {
+	const resolved = path.resolve(configPath);
+	return state.sources.find((source) => path.resolve(source.path) === resolved) ?? null;
+}
+
+function assertWritableConfigTarget(configPath: string, state: McpBridgeConfigState): void {
+	const source = resolveConfigWriteTarget(configPath, state);
+	if (source && !source.writable) throw new Error(`MCP config ${configPath} is read-only.`);
+	if (!source && !isWritablePath(configPath)) throw new Error(`MCP config ${configPath} is not writable.`);
+}
+
 export function upsertMcpServerConfig(input: UpsertMcpServerConfigInput): McpBridgeConfigState {
 	const options = input.options ?? {};
 	const configPath = path.resolve(
 		input.configPath ?? options.defaultWritePath ?? defaultWritePath(options.homeDir ?? os.homedir()),
 	);
+	const state = loadMcpBridgeConfigState(input.cwd, {
+		...options,
+		defaultWritePath: options.defaultWritePath ?? configPath,
+	});
+	assertWritableConfigTarget(configPath, state);
+	const existingAtTarget = state.servers.find(
+		(server) => server.name === input.name && path.resolve(server.sourcePath) === configPath,
+	);
+	if (existingAtTarget?.duplicate) {
+		throw new Error(`MCP server '${input.name}' is a duplicate; resolve duplicate config sources before editing it.`);
+	}
+	const existingElsewhere = state.servers.find(
+		(server) => server.name === input.name && path.resolve(server.sourcePath) !== configPath,
+	);
+	if (!existingAtTarget && existingElsewhere) {
+		throw new Error(
+			`MCP server '${input.name}' is already defined in ${existingElsewhere.sourcePath}; edit that source or choose a unique name.`,
+		);
+	}
+
 	const record = readMutableConfigRecord(configPath);
 	const existingContainer = serverContainer(record);
 	const shape = input.shape ?? existingContainer?.shape ?? "mcpServers";
@@ -1058,14 +1089,29 @@ export function upsertMcpServerConfig(input: UpsertMcpServerConfigInput): McpBri
 }
 
 export function removeMcpServerConfig(input: RemoveMcpServerConfigInput): McpBridgeConfigState {
-	const record = readMutableConfigRecord(input.configPath);
+	const configPath = path.resolve(input.configPath);
+	const options = input.options ?? {};
+	const state = loadMcpBridgeConfigState(input.cwd, {
+		...options,
+		defaultWritePath: options.defaultWritePath ?? configPath,
+	});
+	assertWritableConfigTarget(configPath, state);
+	const existingAtTarget = state.servers.find(
+		(server) => server.name === input.name && path.resolve(server.sourcePath) === configPath,
+	);
+	if (!existingAtTarget) throw new Error(`MCP server '${input.name}' was not found in ${configPath}.`);
+	if (existingAtTarget.duplicate) {
+		throw new Error(`MCP server '${input.name}' is a duplicate; resolve duplicate config sources before removing it.`);
+	}
+
+	const record = readMutableConfigRecord(configPath);
 	const container = serverContainer(record);
-	if (!container) throw new Error(`MCP config ${input.configPath} does not contain server settings.`);
+	if (!container) throw new Error(`MCP config ${configPath} does not contain server settings.`);
 	if (!Object.hasOwn(container.servers, input.name))
-		throw new Error(`MCP server '${input.name}' was not found in ${input.configPath}.`);
+		throw new Error(`MCP server '${input.name}' was not found in ${configPath}.`);
 	delete container.servers[input.name];
-	writeJsonAtomic(input.configPath, record);
-	return loadMcpBridgeConfigState(input.cwd, input.options ?? {});
+	writeJsonAtomic(configPath, record);
+	return loadMcpBridgeConfigState(input.cwd, options);
 }
 
 export function sanitizeName(value: string): string {
