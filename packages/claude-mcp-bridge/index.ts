@@ -1671,10 +1671,21 @@ export type McpBridgeRuntimeController = {
 	): { ok: true; snapshot: McpBridgeRuntimeSnapshot } | { ok: false; error: string };
 };
 
+const MCP_BRIDGE_RUNTIME_GLOBAL_KEY = "__piClaudeMcpBridgeRuntime";
+
+type McpBridgeRuntimeGlobal = typeof globalThis & {
+	[MCP_BRIDGE_RUNTIME_GLOBAL_KEY]?: McpBridgeRuntimeController | null;
+};
+
 let activeMcpBridgeRuntime: McpBridgeRuntimeController | null = null;
 
+function setActiveMcpBridgeRuntime(runtime: McpBridgeRuntimeController | null): void {
+	activeMcpBridgeRuntime = runtime;
+	(globalThis as McpBridgeRuntimeGlobal)[MCP_BRIDGE_RUNTIME_GLOBAL_KEY] = runtime;
+}
+
 export function getActiveMcpBridgeRuntime(): McpBridgeRuntimeController | null {
-	return activeMcpBridgeRuntime;
+	return activeMcpBridgeRuntime ?? (globalThis as McpBridgeRuntimeGlobal)[MCP_BRIDGE_RUNTIME_GLOBAL_KEY] ?? null;
 }
 
 export default function claudeMcpBridge(pi: ExtensionAPI) {
@@ -2054,7 +2065,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 			return { ok: true, snapshot: runtimeSnapshot() };
 		},
 	};
-	activeMcpBridgeRuntime = runtimeController;
+	setActiveMcpBridgeRuntime(runtimeController);
 
 	// Load config synchronously so /mcp-status and the footer know which servers exist,
 	// but wait for the real session cwd before opening MCP transports. Otherwise
@@ -2082,7 +2093,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 		shuttingDown = true;
 		loadGeneration++;
 		activeContext = undefined;
-		if (activeMcpBridgeRuntime === runtimeController) activeMcpBridgeRuntime = null;
+		if (getActiveMcpBridgeRuntime() === runtimeController) setActiveMcpBridgeRuntime(null);
 		await manager.disconnectAll();
 		await startupPromise;
 	});
