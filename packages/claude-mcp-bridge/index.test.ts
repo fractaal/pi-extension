@@ -10,13 +10,17 @@ import claudeMcpBridge, {
 	expandEnvVars,
 	extractRawServers,
 	formatToolResult,
+	loadMcpBridgeConfigState,
+	MCP_BRIDGE_REDACTED_VALUE,
 	mimeToExt,
 	normalizeServer,
 	parseDisabledToolKeys,
 	parseToolVisibilityKey,
+	removeMcpServerConfig,
 	sanitizeName,
 	serializeToolVisibilitySettings,
 	TOOL_VISIBILITY_KEY_SEPARATOR,
+	upsertMcpServerConfig,
 } from "./index.ts";
 
 function envRef(name: string): string {
@@ -158,6 +162,103 @@ describe("extractRawServers", () => {
 	it("should return null for empty object with no server keys", () => {
 		expect(extractRawServers({})).toBeNull();
 		expect(extractRawServers({ unrelated: "data" })).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// MCP config management state/actions
+// ---------------------------------------------------------------------------
+
+describe("MCP config management", () => {
+	it("loads per-server source metadata and redacts env/header values", () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-bridge-config-test-"));
+		try {
+			const projectConfig = path.join(tmpDir, ".mcp.json");
+			const homeDir = path.join(tmpDir, "home");
+			fs.mkdirSync(homeDir, { recursive: true });
+			fs.writeFileSync(
+				projectConfig,
+				JSON.stringify({
+					mcpServers: {
+						alpha: { command: "node", env: { SECRET_TOKEN: "actual" } },
+					},
+				}),
+				"utf-8",
+			);
+			fs.writeFileSync(
+				path.join(homeDir, ".claude.json"),
+				JSON.stringify({
+					mcpServers: {
+						alpha: { command: "duplicate" },
+						beta: { url: "https://example.test/mcp", headers: { Authorization: "Bearer secret" } },
+					},
+				}),
+				"utf-8",
+			);
+
+			const state = loadMcpBridgeConfigState(tmpDir, { homeDir });
+			expect(state.servers.map((server) => `${server.name}:${server.duplicate ? "duplicate" : "primary"}`)).toEqual([
+				"alpha:primary",
+				"alpha:duplicate",
+				"beta:primary",
+			]);
+			const alpha = state.servers.find((server) => server.name === "alpha" && !server.duplicate);
+			expect(alpha?.sourcePath).toBe(projectConfig);
+			expect(alpha?.redacted.env?.SECRET_TOKEN).toBe(MCP_BRIDGE_REDACTED_VALUE);
+			const beta = state.servers.find((server) => server.name === "beta");
+			expect(beta?.redacted.headers?.Authorization).toBe(MCP_BRIDGE_REDACTED_VALUE);
+			expect(state.warnings.some((warning) => warning.includes("duplicate MCP server config: alpha"))).toBe(true);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("upserts into the default mcp config and preserves redacted existing secrets", () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-bridge-upsert-test-"));
+		try {
+			const homeDir = path.join(tmpDir, "home");
+			fs.mkdirSync(homeDir, { recursive: true });
+			const configPath = path.join(homeDir, ".mcp.json");
+			upsertMcpServerConfig({
+				cwd: tmpDir,
+				name: "gamma",
+				server: { command: "node", args: ["server.js"], env: { TOKEN: "secret" } },
+				options: { homeDir },
+			});
+			upsertMcpServerConfig({
+				cwd: tmpDir,
+				name: "gamma",
+				configPath,
+				server: { command: "node", args: ["server.js", "--verbose"], env: { TOKEN: MCP_BRIDGE_REDACTED_VALUE } },
+				options: { homeDir },
+			});
+
+			const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+			expect(parsed.mcpServers.gamma.args).toEqual(["server.js", "--verbose"]);
+			expect(parsed.mcpServers.gamma.env.TOKEN).toBe("secret");
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("removes a server from the source config file that owns it", () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-bridge-remove-test-"));
+		try {
+			const configPath = path.join(tmpDir, ".mcp.json");
+			fs.writeFileSync(
+				configPath,
+				JSON.stringify({ servers: { keep: { command: "node" }, remove: { command: "node" } } }),
+				"utf-8",
+			);
+
+			removeMcpServerConfig({ cwd: tmpDir, name: "remove", configPath, options: { homeDir: tmpDir } });
+
+			const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+			expect(parsed.servers.keep).toBeTruthy();
+			expect(parsed.servers.remove).toBeUndefined();
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });
 

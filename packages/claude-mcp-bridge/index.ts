@@ -10,7 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Type } from "@sinclair/typebox";
 
-type RawMcpServer = {
+export type RawMcpServer = {
 	type?: string;
 	enabled?: boolean;
 	command?: string;
@@ -21,7 +21,7 @@ type RawMcpServer = {
 	headers?: Record<string, string>;
 };
 
-type NormalizedMcpServer =
+export type NormalizedMcpServer =
 	| {
 			name: string;
 			type: "stdio";
@@ -39,13 +39,48 @@ type NormalizedMcpServer =
 			headers: Record<string, string>;
 	  };
 
-type DiscoveredTool = {
+export type DiscoveredTool = {
 	name: string;
 	description?: string;
 	inputSchema: Record<string, unknown>;
 };
 
-type ServerStatus = "connecting" | "connected" | "disconnected" | "error";
+export type ServerStatus = "connecting" | "connected" | "disconnected" | "error";
+export type McpBridgeConfigShape = "mcpServers" | "mcp.servers" | "servers";
+export type McpBridgeLogLevel = "debug" | "info" | "warning" | "error";
+
+export type McpBridgeLogEntry = {
+	timestamp: string;
+	level: McpBridgeLogLevel;
+	message: string;
+	serverName?: string;
+	toolName?: string;
+};
+
+export type McpBridgeRuntimeTool = DiscoveredTool & {
+	piToolName: string;
+	disabled: boolean;
+};
+
+export type McpBridgeRuntimeServer = {
+	name: string;
+	type: NormalizedMcpServer["type"];
+	status: ServerStatus;
+	toolCount: number;
+	tools: McpBridgeRuntimeTool[];
+	error?: string;
+};
+
+export type McpBridgeRuntimeSnapshot = {
+	loadedSourcePath: string | null;
+	servers: McpBridgeRuntimeServer[];
+	warnings: string[];
+	logs: McpBridgeLogEntry[];
+};
+
+export type McpBridgeLogSink = (entry: McpBridgeLogEntry) => void;
+
+export const MCP_BRIDGE_REDACTED_VALUE = "••••••";
 
 class McpConnection {
 	private static readonly MAX_RECONNECT_ATTEMPTS = 5;
@@ -70,7 +105,14 @@ class McpConnection {
 	public error?: string;
 	public tools: DiscoveredTool[] = [];
 
-	constructor(public readonly server: NormalizedMcpServer) {}
+	constructor(
+		public readonly server: NormalizedMcpServer,
+		private readonly log?: McpBridgeLogSink,
+	) {}
+
+	private logEvent(level: McpBridgeLogLevel, message: string, toolName?: string): void {
+		this.log?.({ timestamp: new Date().toISOString(), level, serverName: this.server.name, toolName, message });
+	}
 
 	// ── public API ────────────────────────────────────────────
 
@@ -165,6 +207,7 @@ class McpConnection {
 		this.status = "connecting";
 		this.error = undefined;
 		this.tools = [];
+		this.logEvent("info", `Connecting MCP server '${this.server.name}'`);
 
 		try {
 			const client = new Client({ name: "pi-claude-mcp-bridge", version: "0.1.0" }, { capabilities: {} });
@@ -220,6 +263,7 @@ class McpConnection {
 				this.client = null;
 				this.transport = null;
 				this.activeConnectionGeneration = 0;
+				this.logEvent("warning", `MCP server '${this.server.name}' disconnected unexpectedly; scheduling reconnect`);
 				this.scheduleReconnect();
 			};
 
@@ -228,6 +272,7 @@ class McpConnection {
 				const msg = error instanceof Error ? error.message : String(error);
 				if (msg.includes("unknown message ID")) return; // harmless race; ignore
 				this.error = msg;
+				this.logEvent("warning", `MCP server '${this.server.name}' reported an error: ${msg}`);
 			};
 
 			const result = await client.listTools();
@@ -242,6 +287,7 @@ class McpConnection {
 			}));
 			this.status = "connected";
 			this.reconnectAttempts = 0;
+			this.logEvent("info", `Connected MCP server '${this.server.name}' with ${this.tools.length} tool(s)`);
 		} catch (error) {
 			if (this.isStaleConnection(generation)) {
 				await this.cleanupConnection(generation);
@@ -257,6 +303,7 @@ class McpConnection {
 
 			this.status = "error";
 			this.error = message;
+			this.logEvent("error", `MCP server '${this.server.name}' connection failed: ${message}`);
 		}
 	}
 
@@ -299,6 +346,7 @@ class McpConnection {
 		if (this.reconnectAttempts >= McpConnection.MAX_RECONNECT_ATTEMPTS) {
 			this.status = "error";
 			this.error = `Reconnection failed after ${McpConnection.MAX_RECONNECT_ATTEMPTS} attempts for '${this.server.name}'`;
+			this.logEvent("error", this.error);
 			return;
 		}
 
@@ -319,16 +367,23 @@ class McpConnection {
 	}
 }
 
-class McpManager {
+export class McpManager {
 	private connections = new Map<string, McpConnection>();
 	public sourcePath: string | null = null;
+
+	constructor(private readonly log?: McpBridgeLogSink) {}
 
 	setServers(servers: NormalizedMcpServer[], sourcePath: string | null): void {
 		this.connections.clear();
 		for (const server of servers) {
-			this.connections.set(server.name, new McpConnection(server));
+			this.connections.set(server.name, new McpConnection(server, this.log));
 		}
 		this.sourcePath = sourcePath;
+		this.log?.({
+			timestamp: new Date().toISOString(),
+			level: "info",
+			message: `Loaded ${servers.length} MCP server config(s)`,
+		});
 	}
 
 	async replaceServers(servers: NormalizedMcpServer[], sourcePath: string | null): Promise<void> {
@@ -378,12 +433,63 @@ class McpManager {
 		return tools;
 	}
 
+	getSnapshot(
+		disabledToolKeys: Set<string>,
+		logs: McpBridgeLogEntry[],
+		warnings: string[] = [],
+	): McpBridgeRuntimeSnapshot {
+		return {
+			loadedSourcePath: this.sourcePath,
+			warnings,
+			logs: [...logs],
+			servers: Array.from(this.connections.values()).map((conn) => ({
+				name: conn.server.name,
+				type: conn.server.type,
+				status: conn.status,
+				toolCount: conn.tools.length,
+				error: conn.error,
+				tools: conn.tools.map((tool) => ({
+					...tool,
+					piToolName: buildPiToolName(conn.server.name, tool.name),
+					disabled: disabledToolKeys.has(buildToolVisibilityKey(conn.server.name, tool.name)),
+				})),
+			})),
+		};
+	}
+
 	async callTool(serverName: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
 		const conn = this.connections.get(serverName);
 		if (!conn) {
 			throw new Error(`MCP server '${serverName}' not found`);
 		}
-		return conn.callTool(toolName, args);
+		this.log?.({
+			timestamp: new Date().toISOString(),
+			level: "info",
+			serverName,
+			toolName,
+			message: `Calling MCP tool ${serverName}/${toolName}`,
+		});
+		try {
+			const result = await conn.callTool(toolName, args);
+			this.log?.({
+				timestamp: new Date().toISOString(),
+				level: "info",
+				serverName,
+				toolName,
+				message: `MCP tool ${serverName}/${toolName} completed`,
+			});
+			return result;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.log?.({
+				timestamp: new Date().toISOString(),
+				level: "error",
+				serverName,
+				toolName,
+				message: `MCP tool ${serverName}/${toolName} failed: ${message}`,
+			});
+			throw error;
+		}
 	}
 
 	async reconnectServer(name: string): Promise<void> {
@@ -404,6 +510,58 @@ type LoadedConfig = {
 	sourcePath: string | null;
 	servers: NormalizedMcpServer[];
 	warnings: string[];
+};
+
+export type McpBridgeConfigSource = {
+	path: string;
+	exists: boolean;
+	writable: boolean;
+	shape: McpBridgeConfigShape | null;
+	serverNames: string[];
+	warnings: string[];
+};
+
+export type McpBridgeConfiguredServer = {
+	name: string;
+	sourcePath: string;
+	sourceShape: McpBridgeConfigShape;
+	duplicate: boolean;
+	valid: boolean;
+	redacted: RawMcpServer;
+	normalizedType: NormalizedMcpServer["type"] | null;
+	warning?: string;
+};
+
+export type McpBridgeConfigState = {
+	defaultWritePath: string;
+	explicitPath: string | null;
+	sources: McpBridgeConfigSource[];
+	servers: McpBridgeConfiguredServer[];
+	warnings: string[];
+};
+
+export type McpBridgeConfigOptions = {
+	env?: NodeJS.ProcessEnv;
+	homeDir?: string;
+	explicitConfigPath?: string | null;
+	defaultWritePath?: string;
+	candidatePaths?: string[];
+};
+
+export type UpsertMcpServerConfigInput = {
+	cwd: string;
+	name: string;
+	server: RawMcpServer;
+	configPath?: string;
+	shape?: McpBridgeConfigShape;
+	options?: McpBridgeConfigOptions;
+};
+
+export type RemoveMcpServerConfigInput = {
+	cwd: string;
+	name: string;
+	configPath: string;
+	options?: McpBridgeConfigOptions;
 };
 
 type ToolVisibilitySettingsFile = {
@@ -566,24 +724,99 @@ function safeReadJson(filePath: string): unknown | null {
 	}
 }
 
-export function extractRawServers(data: unknown): Record<string, RawMcpServer> | null {
-	if (!data || typeof data !== "object") return null;
-	const record = data as Record<string, unknown>;
+function readJsonWithError(filePath: string): { ok: true; data: unknown } | { ok: false; error: string } {
+	try {
+		const raw = fs.readFileSync(filePath, "utf-8");
+		return { ok: true, data: JSON.parse(raw) };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return { ok: false, error: message };
+	}
+}
 
-	if (record.mcpServers && typeof record.mcpServers === "object") {
-		return record.mcpServers as Record<string, RawMcpServer>;
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function serverContainer(data: unknown): { shape: McpBridgeConfigShape; servers: Record<string, RawMcpServer> } | null {
+	if (!isRecord(data)) return null;
+
+	if (data.mcpServers && typeof data.mcpServers === "object" && !Array.isArray(data.mcpServers)) {
+		return { shape: "mcpServers", servers: data.mcpServers as Record<string, RawMcpServer> };
 	}
 
-	const mcp = record.mcp as Record<string, unknown> | undefined;
-	if (mcp?.servers && typeof mcp.servers === "object") {
-		return mcp.servers as Record<string, RawMcpServer>;
+	const mcp = data.mcp;
+	if (isRecord(mcp) && mcp.servers && typeof mcp.servers === "object" && !Array.isArray(mcp.servers)) {
+		return { shape: "mcp.servers", servers: mcp.servers as Record<string, RawMcpServer> };
 	}
 
-	if (record.servers && typeof record.servers === "object") {
-		return record.servers as Record<string, RawMcpServer>;
+	if (data.servers && typeof data.servers === "object" && !Array.isArray(data.servers)) {
+		return { shape: "servers", servers: data.servers as Record<string, RawMcpServer> };
 	}
 
 	return null;
+}
+
+export function extractRawServers(data: unknown): Record<string, RawMcpServer> | null {
+	return serverContainer(data)?.servers ?? null;
+}
+
+function redactRecord(record?: Record<string, string>): Record<string, string> | undefined {
+	if (!record) return undefined;
+	const output: Record<string, string> = {};
+	for (const key of Object.keys(record).sort((a, b) => a.localeCompare(b))) {
+		output[key] = MCP_BRIDGE_REDACTED_VALUE;
+	}
+	return output;
+}
+
+export function redactMcpServer(raw: RawMcpServer): RawMcpServer {
+	return {
+		...raw,
+		args: raw.args ? [...raw.args] : undefined,
+		env: redactRecord(raw.env),
+		headers: redactRecord(raw.headers),
+	};
+}
+
+function mergeRedactedRecord(
+	input?: Record<string, string>,
+	existing?: Record<string, string>,
+): Record<string, string> | undefined {
+	if (!input) return undefined;
+	const output: Record<string, string> = {};
+	for (const [key, value] of Object.entries(input)) {
+		output[key] =
+			value === MCP_BRIDGE_REDACTED_VALUE && existing && Object.hasOwn(existing, key) ? existing[key] : value;
+	}
+	return output;
+}
+
+function preserveRedactedServer(input: RawMcpServer, existing?: RawMcpServer): RawMcpServer {
+	return {
+		...input,
+		args: input.args ? [...input.args] : undefined,
+		env: mergeRedactedRecord(input.env, existing?.env),
+		headers: mergeRedactedRecord(input.headers, existing?.headers),
+	};
+}
+
+function defaultWritePath(homeDir = os.homedir()): string {
+	return path.join(homeDir, ".mcp.json");
+}
+
+function isWritablePath(filePath: string): boolean {
+	try {
+		if (fs.existsSync(filePath)) {
+			fs.accessSync(filePath, fs.constants.W_OK);
+			return true;
+		}
+		const parent = path.dirname(filePath);
+		fs.accessSync(parent, fs.constants.W_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function normalizeServer(name: string, raw: RawMcpServer): NormalizedMcpServer | null {
@@ -627,7 +860,11 @@ export function normalizeServer(name: string, raw: RawMcpServer): NormalizedMcpS
 	return null;
 }
 
-function collectScopedConfigCandidates(cwd: string): string[] {
+export function collectMcpConfigCandidates(cwd: string, options: McpBridgeConfigOptions = {}): string[] {
+	const explicitPath = options.explicitConfigPath ?? options.env?.PI_MCP_CONFIG;
+	if (explicitPath) return [path.resolve(expandEnvVars(explicitPath))];
+	if (options.candidatePaths) return options.candidatePaths.map((candidate) => path.resolve(candidate));
+
 	const candidates: string[] = [];
 	const seen = new Set<string>();
 
@@ -639,7 +876,7 @@ function collectScopedConfigCandidates(cwd: string): string[] {
 	};
 
 	let current = path.resolve(cwd);
-	const home = path.resolve(os.homedir());
+	const home = path.resolve(options.homeDir ?? os.homedir());
 	const root = path.parse(current).root;
 
 	while (true) {
@@ -654,18 +891,94 @@ function collectScopedConfigCandidates(cwd: string): string[] {
 		current = parent;
 	}
 
-	push(path.join(os.homedir(), ".mcp.json"));
-	push(path.join(os.homedir(), ".claude.json"));
+	push(path.join(home, ".mcp.json"));
+	push(path.join(home, ".claude.json"));
 
 	return candidates;
 }
 
+export function loadMcpBridgeConfigState(cwd: string, options: McpBridgeConfigOptions = {}): McpBridgeConfigState {
+	const homeDir = options.homeDir ?? os.homedir();
+	const explicitPath = options.explicitConfigPath ?? options.env?.PI_MCP_CONFIG ?? null;
+	const defaultPath = path.resolve(options.defaultWritePath ?? defaultWritePath(homeDir));
+	const candidates = collectMcpConfigCandidates(cwd, { ...options, homeDir });
+	const warnings: string[] = [];
+	const sources: McpBridgeConfigSource[] = [];
+	const servers: McpBridgeConfiguredServer[] = [];
+	const seenServers = new Set<string>();
+
+	for (const candidate of candidates) {
+		const exists = fs.existsSync(candidate);
+		if (!exists) continue;
+
+		const sourceWarnings: string[] = [];
+		let shape: McpBridgeConfigShape | null = null;
+		let serverNames: string[] = [];
+		const parsed = readJsonWithError(candidate);
+		if (!parsed.ok) {
+			const warning = `Failed to parse MCP config ${candidate}: ${parsed.error}`;
+			sourceWarnings.push(warning);
+			warnings.push(warning);
+		} else {
+			const container = serverContainer(parsed.data);
+			if (container) {
+				shape = container.shape;
+				serverNames = Object.keys(container.servers);
+				for (const [name, raw] of Object.entries(container.servers)) {
+					const duplicate = seenServers.has(name);
+					if (!duplicate) seenServers.add(name);
+					const normalized = normalizeServer(name, raw);
+					let warning: string | undefined;
+					if (duplicate) warning = `Skipped duplicate MCP server config: ${name} (from ${candidate})`;
+					else if (!normalized) warning = `Skipped invalid MCP server config: ${name}`;
+					if (warning) warnings.push(warning);
+					servers.push({
+						name,
+						sourcePath: candidate,
+						sourceShape: container.shape,
+						duplicate,
+						valid: Boolean(normalized) && !duplicate,
+						redacted: redactMcpServer(raw),
+						normalizedType: normalized?.type ?? null,
+						warning,
+					});
+				}
+			}
+		}
+
+		sources.push({
+			path: candidate,
+			exists,
+			writable: isWritablePath(candidate),
+			shape,
+			serverNames,
+			warnings: sourceWarnings,
+		});
+	}
+
+	if (!sources.some((source) => source.path === defaultPath)) {
+		sources.push({
+			path: defaultPath,
+			exists: fs.existsSync(defaultPath),
+			writable: isWritablePath(defaultPath),
+			shape: null,
+			serverNames: [],
+			warnings: [],
+		});
+	}
+
+	return {
+		defaultWritePath: defaultPath,
+		explicitPath: explicitPath ? path.resolve(expandEnvVars(explicitPath)) : null,
+		sources,
+		servers,
+		warnings,
+	};
+}
+
 function loadConfig(cwd: string): LoadedConfig {
 	const warnings: string[] = [];
-
-	const explicitPath = process.env.PI_MCP_CONFIG;
-	const candidates = explicitPath ? [path.resolve(expandEnvVars(explicitPath))] : collectScopedConfigCandidates(cwd);
-
+	const candidates = collectMcpConfigCandidates(cwd, { env: process.env });
 	const loadedSources: string[] = [];
 	const serversByName = new Map<string, NormalizedMcpServer>();
 
@@ -694,6 +1007,65 @@ function loadConfig(cwd: string): LoadedConfig {
 		servers: Array.from(serversByName.values()),
 		warnings,
 	};
+}
+
+function ensureServerContainer(
+	record: Record<string, unknown>,
+	shape: McpBridgeConfigShape,
+): Record<string, RawMcpServer> {
+	if (shape === "mcpServers") {
+		if (!isRecord(record.mcpServers)) record.mcpServers = {};
+		return record.mcpServers as Record<string, RawMcpServer>;
+	}
+	if (shape === "mcp.servers") {
+		if (!isRecord(record.mcp)) record.mcp = {};
+		const mcp = record.mcp as Record<string, unknown>;
+		if (!isRecord(mcp.servers)) mcp.servers = {};
+		return mcp.servers as Record<string, RawMcpServer>;
+	}
+	if (!isRecord(record.servers)) record.servers = {};
+	return record.servers as Record<string, RawMcpServer>;
+}
+
+function readMutableConfigRecord(configPath: string): Record<string, unknown> {
+	if (!fs.existsSync(configPath)) return {};
+	const parsed = readJsonWithError(configPath);
+	if (!parsed.ok) throw new Error(`Failed to parse MCP config ${configPath}: ${parsed.error}`);
+	if (!isRecord(parsed.data)) throw new Error(`MCP config ${configPath} must be a JSON object.`);
+	return parsed.data;
+}
+
+function writeJsonAtomic(filePath: string, value: unknown): void {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+	fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+	fs.renameSync(tmp, filePath);
+}
+
+export function upsertMcpServerConfig(input: UpsertMcpServerConfigInput): McpBridgeConfigState {
+	const options = input.options ?? {};
+	const configPath = path.resolve(
+		input.configPath ?? options.defaultWritePath ?? defaultWritePath(options.homeDir ?? os.homedir()),
+	);
+	const record = readMutableConfigRecord(configPath);
+	const existingContainer = serverContainer(record);
+	const shape = input.shape ?? existingContainer?.shape ?? "mcpServers";
+	const servers = existingContainer?.shape === shape ? existingContainer.servers : ensureServerContainer(record, shape);
+	const existing = servers[input.name];
+	servers[input.name] = preserveRedactedServer(input.server, existing);
+	writeJsonAtomic(configPath, record);
+	return loadMcpBridgeConfigState(input.cwd, { ...options, defaultWritePath: options.defaultWritePath ?? configPath });
+}
+
+export function removeMcpServerConfig(input: RemoveMcpServerConfigInput): McpBridgeConfigState {
+	const record = readMutableConfigRecord(input.configPath);
+	const container = serverContainer(record);
+	if (!container) throw new Error(`MCP config ${input.configPath} does not contain server settings.`);
+	if (!Object.hasOwn(container.servers, input.name))
+		throw new Error(`MCP server '${input.name}' was not found in ${input.configPath}.`);
+	delete container.servers[input.name];
+	writeJsonAtomic(input.configPath, record);
+	return loadMcpBridgeConfigState(input.cwd, input.options ?? {});
 }
 
 export function sanitizeName(value: string): string {
@@ -1288,8 +1660,27 @@ class McpToolListOverlay {
 	}
 }
 
+export type McpBridgeRuntimeController = {
+	getSnapshot(): McpBridgeRuntimeSnapshot;
+	reload(cwd?: string): Promise<McpBridgeRuntimeSnapshot>;
+	reconnectServer(serverName: string): Promise<McpBridgeRuntimeSnapshot>;
+	setToolDisabled(
+		serverName: string,
+		toolName: string,
+		disabled: boolean,
+	): { ok: true; snapshot: McpBridgeRuntimeSnapshot } | { ok: false; error: string };
+};
+
+let activeMcpBridgeRuntime: McpBridgeRuntimeController | null = null;
+
+export function getActiveMcpBridgeRuntime(): McpBridgeRuntimeController | null {
+	return activeMcpBridgeRuntime;
+}
+
 export default function claudeMcpBridge(pi: ExtensionAPI) {
-	const manager = new McpManager();
+	const recentLogs: McpBridgeLogEntry[] = [];
+	const maxLogs = 200;
+	const manager = new McpManager((entry) => recordLog(entry));
 	const registeredTools = new Set<string>();
 	let loadedAt: LoadedConfig = { sourcePath: null, servers: [], warnings: [] };
 	const loadedToolVisibility = loadToolVisibilitySettings();
@@ -1299,6 +1690,20 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 	let loadGeneration = 0;
 	let startupPromise: Promise<void> | undefined;
 	let shuttingDown = false;
+
+	function runtimeSnapshot(): McpBridgeRuntimeSnapshot {
+		return manager.getSnapshot(disabledToolKeys, recentLogs, getOverlayWarnings());
+	}
+
+	function emitRuntimeSnapshot(): void {
+		pi.events?.emit("claude-mcp-bridge:state", runtimeSnapshot());
+	}
+
+	function recordLog(entry: McpBridgeLogEntry): void {
+		recentLogs.push(entry);
+		if (recentLogs.length > maxLogs) recentLogs.splice(0, recentLogs.length - maxLogs);
+		pi.events?.emit("claude-mcp-bridge:log", entry);
+	}
 
 	function getOverlayWarnings(): string[] {
 		const warnings = [...loadedAt.warnings];
@@ -1366,15 +1771,15 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 		}
 	}
 
-	function toggleToolDisabled(
+	function setToolDisabledState(
 		serverName: string,
 		toolName: string,
+		disabled: boolean,
 	): { ok: true; disabled: boolean } | { ok: false; error: string } {
 		const key = buildToolVisibilityKey(serverName, toolName);
-		const currentlyDisabled = disabledToolKeys.has(key);
-		const nextDisabled = !currentlyDisabled;
+		const wasDisabled = disabledToolKeys.has(key);
 
-		if (nextDisabled) {
+		if (disabled) {
 			disabledToolKeys.add(key);
 		} else {
 			disabledToolKeys.delete(key);
@@ -1382,7 +1787,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 
 		const saved = saveToolVisibilitySettings(disabledToolKeys);
 		if (!saved.ok) {
-			if (currentlyDisabled) {
+			if (wasDisabled) {
 				disabledToolKeys.add(key);
 			} else {
 				disabledToolKeys.delete(key);
@@ -1391,7 +1796,18 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 		}
 
 		toolVisibilityWarning = undefined;
-		return { ok: true, disabled: nextDisabled };
+		return { ok: true, disabled };
+	}
+
+	function toggleToolDisabled(
+		serverName: string,
+		toolName: string,
+	): { ok: true; disabled: boolean } | { ok: false; error: string } {
+		return setToolDisabledState(
+			serverName,
+			toolName,
+			!disabledToolKeys.has(buildToolVisibilityKey(serverName, toolName)),
+		);
 	}
 
 	function notifyStatusSummary(ctx: ExtensionContext): void {
@@ -1427,15 +1843,18 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 			}
 			setToolActive(piToolName, false);
 			ctx.ui.notify(`${piToolName}: disabled`, "info");
+			emitRuntimeSnapshot();
 			return;
 		}
 
 		if (registeredTools.has(piToolName)) {
 			setToolActive(piToolName, true);
 			ctx.ui.notify(`${piToolName}: enabled`, "info");
+			emitRuntimeSnapshot();
 			return;
 		}
 		ctx.ui.notify(`${piToolName}: enabled (connect or reload to register)`, "warning");
+		emitRuntimeSnapshot();
 	}
 
 	async function showToolOverlay(
@@ -1542,7 +1961,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 						}
 						return new Text("", 0, 0);
 					}
-					if (!tc || tc.type !== "text") return new Text("", 0, 0);
+					if (tc?.type !== "text") return new Text("", 0, 0);
 					const output = tc.text
 						.trim()
 						.split("\n")
@@ -1576,6 +1995,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 		registerDiscoveredTools();
 		removeDisabledToolsFromActiveSet();
 		if (activeContext) updateStatus(activeContext);
+		emitRuntimeSnapshot();
 	}
 
 	function loadConfiguredServers(cwd: string): number {
@@ -1595,11 +2015,44 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 			if (shuttingDown || generation !== loadGeneration) return;
 			const message = error instanceof Error ? error.message : String(error);
 			toolVisibilityWarning = `MCP background startup failed: ${message}`;
+			recordLog({ timestamp: new Date().toISOString(), level: "error", message: toolVisibilityWarning });
 			if (activeContext?.hasUI) {
 				activeContext.ui.notify(`[claude-mcp-bridge] ${toolVisibilityWarning}`, "warning");
 			}
+			emitRuntimeSnapshot();
 		}
 	}
+
+	async function reloadConfiguredServers(cwd: string): Promise<McpBridgeRuntimeSnapshot> {
+		const loaded = loadConfig(cwd);
+		loadedAt = loaded;
+		await manager.replaceServers(loaded.servers, loaded.sourcePath);
+		const generation = ++loadGeneration;
+		refreshRuntimeState(generation);
+		await connectConfiguredServersInBackground(generation);
+		return runtimeSnapshot();
+	}
+
+	const runtimeController: McpBridgeRuntimeController = {
+		getSnapshot: runtimeSnapshot,
+		reload: async (cwd = process.cwd()) => reloadConfiguredServers(cwd),
+		reconnectServer: async (serverName: string) => {
+			await manager.reconnectServer(serverName);
+			refreshRuntimeState(loadGeneration);
+			return runtimeSnapshot();
+		},
+		setToolDisabled: (serverName: string, toolName: string, disabled: boolean) => {
+			const result = setToolDisabledState(serverName, toolName, disabled);
+			if (!result.ok) return result;
+			registerDiscoveredTools();
+			removeDisabledToolsFromActiveSet();
+			const piToolName = buildPiToolName(serverName, toolName);
+			setToolActive(piToolName, !disabled);
+			emitRuntimeSnapshot();
+			return { ok: true, snapshot: runtimeSnapshot() };
+		},
+	};
+	activeMcpBridgeRuntime = runtimeController;
 
 	// Load config synchronously so /mcp-status and the footer know which servers exist,
 	// but do not await server connection/tool discovery during pi startup. Tools are
@@ -1611,6 +2064,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 		activeContext = ctx;
 		updateStatus(ctx);
 		removeDisabledToolsFromActiveSet();
+		emitRuntimeSnapshot();
 		if (toolVisibilityWarning && ctx.hasUI) {
 			ctx.ui.notify(`[claude-mcp-bridge] ${toolVisibilityWarning}`, "warning");
 		}
@@ -1620,6 +2074,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 		shuttingDown = true;
 		loadGeneration++;
 		activeContext = undefined;
+		if (activeMcpBridgeRuntime === runtimeController) activeMcpBridgeRuntime = null;
 		await manager.disconnectAll();
 		await startupPromise;
 	});
