@@ -2057,16 +2057,18 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 	activeMcpBridgeRuntime = runtimeController;
 
 	// Load config synchronously so /mcp-status and the footer know which servers exist,
-	// but do not await server connection/tool discovery during pi startup. Tools are
-	// registered dynamically as MCP servers finish connecting in the background.
-	const startupGeneration = loadConfiguredServers(process.cwd());
-	startupPromise = connectConfiguredServersInBackground(startupGeneration);
+	// but wait for the real session cwd before opening MCP transports. Otherwise
+	// ALR/desktop sessions launched from an app cwd can briefly connect stale
+	// project servers and then replace the map before those transports close.
+	loadConfiguredServers(process.cwd());
 
 	pi.on("session_start", async (_event, ctx) => {
 		activeContext = ctx;
 		if (path.resolve(ctx.cwd) !== path.resolve(loadedCwd)) {
 			const generation = loadConfiguredServers(ctx.cwd);
 			startupPromise = connectConfiguredServersInBackground(generation);
+		} else if (!startupPromise) {
+			startupPromise = connectConfiguredServersInBackground(loadGeneration);
 		}
 		updateStatus(ctx);
 		removeDisabledToolsFromActiveSet();
