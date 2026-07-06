@@ -1687,6 +1687,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 	const disabledToolKeys = loadedToolVisibility.disabledToolKeys;
 	let toolVisibilityWarning = loadedToolVisibility.warning;
 	let activeContext: ExtensionContext | undefined;
+	let loadedCwd = process.cwd();
 	let loadGeneration = 0;
 	let startupPromise: Promise<void> | undefined;
 	let shuttingDown = false;
@@ -1999,6 +2000,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 	}
 
 	function loadConfiguredServers(cwd: string): number {
+		loadedCwd = cwd;
 		const loaded = loadConfig(cwd);
 		loadedAt = loaded;
 		manager.setServers(loaded.servers, loaded.sourcePath);
@@ -2062,6 +2064,10 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		activeContext = ctx;
+		if (path.resolve(ctx.cwd) !== path.resolve(loadedCwd)) {
+			const generation = loadConfiguredServers(ctx.cwd);
+			startupPromise = connectConfiguredServersInBackground(generation);
+		}
 		updateStatus(ctx);
 		removeDisabledToolsFromActiveSet();
 		emitRuntimeSnapshot();
