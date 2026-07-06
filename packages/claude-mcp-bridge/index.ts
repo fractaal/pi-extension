@@ -956,6 +956,19 @@ export function loadMcpBridgeConfigState(cwd: string, options: McpBridgeConfigOp
 		});
 	}
 
+	const duplicatedNames = new Set<string>();
+	const serverCounts = new Map<string, number>();
+	for (const server of servers) serverCounts.set(server.name, (serverCounts.get(server.name) ?? 0) + 1);
+	for (const [name, count] of serverCounts) {
+		if (count > 1) duplicatedNames.add(name);
+	}
+	for (const server of servers) {
+		if (!duplicatedNames.has(server.name)) continue;
+		server.duplicate = true;
+		server.valid = false;
+		if (!server.warning) server.warning = `Ambiguous duplicate MCP server config: ${server.name}`;
+	}
+
 	if (!sources.some((source) => source.path === defaultPath)) {
 		sources.push({
 			path: defaultPath,

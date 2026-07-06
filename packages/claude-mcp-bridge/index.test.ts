@@ -198,12 +198,13 @@ describe("MCP config management", () => {
 
 			const state = loadMcpBridgeConfigState(tmpDir, { homeDir });
 			expect(state.servers.map((server) => `${server.name}:${server.duplicate ? "duplicate" : "primary"}`)).toEqual([
-				"alpha:primary",
+				"alpha:duplicate",
 				"alpha:duplicate",
 				"beta:primary",
 			]);
-			const alpha = state.servers.find((server) => server.name === "alpha" && !server.duplicate);
+			const alpha = state.servers.find((server) => server.name === "alpha" && server.sourcePath === projectConfig);
 			expect(alpha?.sourcePath).toBe(projectConfig);
+			expect(alpha?.duplicate).toBe(true);
 			expect(alpha?.redacted.env?.SECRET_TOKEN).toBe(MCP_BRIDGE_REDACTED_VALUE);
 			const beta = state.servers.find((server) => server.name === "beta");
 			expect(beta?.redacted.headers?.Authorization).toBe(MCP_BRIDGE_REDACTED_VALUE);
@@ -270,10 +271,22 @@ describe("MCP config management", () => {
 				upsertMcpServerConfig({
 					cwd: tmpDir,
 					name: "alpha",
+					configPath: projectConfig,
+					server: { command: "node" },
+					options: { homeDir },
+				}),
+			).toThrow(/duplicate/);
+			expect(() =>
+				upsertMcpServerConfig({
+					cwd: tmpDir,
+					name: "alpha",
 					configPath: homeConfig,
 					server: { command: "node" },
 					options: { homeDir },
 				}),
+			).toThrow(/duplicate/);
+			expect(() =>
+				removeMcpServerConfig({ cwd: tmpDir, name: "alpha", configPath: projectConfig, options: { homeDir } }),
 			).toThrow(/duplicate/);
 			expect(() =>
 				removeMcpServerConfig({ cwd: tmpDir, name: "alpha", configPath: homeConfig, options: { homeDir } }),
