@@ -10,7 +10,10 @@
 	],
 	"pi": {
 		"extensions": [
-			"packages/claude-mcp-bridge/index.ts"
+			"packages/claude-mcp-bridge/index.ts",
+			"packages/agentic-processes/index.ts",
+			"packages/codex-usage-info/index.ts",
+			"packages/fractal-compact/index.ts"
 		]
 	},
 	"scripts": {

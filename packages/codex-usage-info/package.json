@@ -1,0 +1,20 @@
+{
+	"name": "@ryan_nookpi/pi-extension-codex-usage-info",
+	"version": "0.1.0",
+	"description": "Codex/OpenAI usage statusline extension for Pi.",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"codex",
+		"usage"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

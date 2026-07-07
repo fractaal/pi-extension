@@ -1,0 +1,22 @@
+{
+	"name": "@ryan_nookpi/pi-extension-agentic-processes",
+	"version": "0.1.0",
+	"description": "Agentic process lifecycle tools for Pi: background bash tasks, sparse monitors, and headless management APIs.",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"bash",
+		"monitor",
+		"agentic"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@sinclair/typebox": "*"
+	}
+}

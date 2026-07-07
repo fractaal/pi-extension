@@ -1,0 +1,21 @@
+{
+	"name": "@ryan_nookpi/pi-extension-fractal-compact",
+	"version": "0.1.0",
+	"description": "Ben/Fractal high-fidelity compaction extension for Pi.",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"compact",
+		"fractal"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
