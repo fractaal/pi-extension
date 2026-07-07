@@ -141,6 +141,26 @@ describe("agentic processes extension", () => {
 		unsubscribe();
 	});
 
+	it("keeps bash task state scoped to each manager instance", async () => {
+		const cwd = await tempCwd();
+		const apiMock = createExtensionApiMock();
+		installEventBus(apiMock);
+		const firstManager = createBashTaskManager(apiMock.api);
+		const secondManager = createBashTaskManager(apiMock.api);
+
+		const task = await firstManager.start({
+			command: "printf 'scoped-running\\n'; sleep 30",
+			cwd,
+			backgroundAfterSeconds: 0.01,
+		});
+		expect(firstManager.list("running").map((item) => item.taskId)).toContain(task.taskId);
+		expect(secondManager.list("running").map((item) => item.taskId)).not.toContain(task.taskId);
+		await expect(secondManager.stop(task.taskId, "wrong manager", 0)).rejects.toThrow(
+			"Unknown background bash task id",
+		);
+		await firstManager.stop(task.taskId, "scoped manager cleanup");
+	});
+
 	it("supports background bash start, list, output, completion, and kill flows", async () => {
 		const cwd = await tempCwd();
 		const apiMock = createExtensionApiMock();

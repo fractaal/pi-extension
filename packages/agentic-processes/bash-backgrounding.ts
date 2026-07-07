@@ -118,12 +118,23 @@ export interface BashTaskRecord {
 	completionSettled: boolean;
 }
 
-const tasks = new Map<string, TaskRecord>();
-const bashTaskSubscribers = new Set<BashTaskUpdateListener>();
-let lastUpdateAt = 0;
-let updateTimer: ReturnType<typeof setTimeout> | undefined;
+interface BashTaskStore {
+	tasks: Map<string, TaskRecord>;
+	subscribers: Set<BashTaskUpdateListener>;
+	lastUpdateAt: number;
+	updateTimer: ReturnType<typeof setTimeout> | undefined;
+}
 
 type TaskRecord = BashTaskRecord;
+
+function createBashTaskStore(): BashTaskStore {
+	return {
+		tasks: new Map(),
+		subscribers: new Set(),
+		lastUpdateAt: 0,
+		updateTimer: undefined,
+	};
+}
 
 function appendTail(task: TaskRecord, chunk: Buffer | string): void {
 	const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
@@ -163,24 +174,28 @@ async function readTail(filePath: string, maxBytes: number): Promise<string> {
 	}
 }
 
-function scheduleUpdate(onUpdate: AgentToolUpdateCallback<{ outputPath: string }> | undefined, task: TaskRecord): void {
+function scheduleUpdate(
+	store: BashTaskStore,
+	onUpdate: AgentToolUpdateCallback<{ outputPath: string }> | undefined,
+	task: TaskRecord,
+): void {
 	if (!onUpdate) return;
 	const emit = () => {
-		lastUpdateAt = Date.now();
+		store.lastUpdateAt = Date.now();
 		onUpdate({
 			content: [{ type: "text", text: snapshotTail(task) || "(running...)" }],
 			details: { outputPath: task.outputPath },
 		});
 	};
-	const delay = UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
+	const delay = UPDATE_THROTTLE_MS - (Date.now() - store.lastUpdateAt);
 	if (delay <= 0) {
-		if (updateTimer) clearTimeout(updateTimer);
-		updateTimer = undefined;
+		if (store.updateTimer) clearTimeout(store.updateTimer);
+		store.updateTimer = undefined;
 		emit();
 		return;
 	}
-	updateTimer ??= setTimeout(() => {
-		updateTimer = undefined;
+	store.updateTimer ??= setTimeout(() => {
+		store.updateTimer = undefined;
 		emit();
 	}, delay);
 }
@@ -198,7 +213,7 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals = "SIGKILL
 	}
 }
 
-function requestKill(pi: ExtensionAPI, task: TaskRecord, reason: string): void {
+function requestKill(pi: ExtensionAPI, store: BashTaskStore, task: TaskRecord, reason: string): void {
 	if (task.status !== "running") return;
 	task.reason = reason;
 	killProcessGroup(task.child);
@@ -209,13 +224,14 @@ function requestKill(pi: ExtensionAPI, task: TaskRecord, reason: string): void {
 		if (!task.stream.destroyed && !task.stream.writableEnded) {
 			task.stream.destroy();
 		}
-		finishTask(pi, task, "killed", task.exitCode ?? 137);
+		finishTask(pi, store, task, "killed", task.exitCode ?? 137);
 	}, 2_000);
 	timer.unref();
 }
 
 function finishTask(
 	pi: ExtensionAPI,
+	store: BashTaskStore,
 	task: TaskRecord,
 	status: Exclude<TaskStatus, "running">,
 	exitCode: number | null,
@@ -240,11 +256,11 @@ function finishTask(
 			reason: task.reason,
 		};
 		task.resolveCompletion(completion);
-		emitBashTaskUpdate(task);
+		emitBashTaskUpdate(store, task);
 		if (task.notifyOnCompletion && COMPLETION_FOLLOW_UP_ENABLED) {
 			queueCompletionMessage(pi, completion);
 		}
-		pruneCompletedTasks();
+		pruneCompletedTasks(store);
 	};
 	if (task.stream.destroyed || task.stream.writableEnded) {
 		settle();
@@ -281,6 +297,7 @@ function queueCompletionMessage(pi: ExtensionAPI, completion: TaskCompletion): v
 
 async function spawnTask(
 	pi: ExtensionAPI,
+	store: BashTaskStore,
 	command: string,
 	cwd: string,
 	backgroundAfterSeconds: number,
@@ -324,13 +341,13 @@ async function spawnTask(
 		backgroundAfterMs: Math.round(backgroundAfterSeconds * 1000),
 		killAfterMs: killAfterSeconds === undefined ? undefined : Math.round(killAfterSeconds * 1000),
 	};
-	tasks.set(taskId, task);
-	emitBashTaskUpdate(task);
+	store.tasks.set(taskId, task);
+	emitBashTaskUpdate(store, task);
 	stream.on("error", (error) => {
 		if (task.status === "running") {
-			requestKill(pi, task, `output stream error: ${error.message}`);
+			requestKill(pi, store, task, `output stream error: ${error.message}`);
 		}
-		finishTask(pi, task, "failed", 1);
+		finishTask(pi, store, task, "failed", 1);
 	});
 	const writeChunk = (chunk: Buffer | string) => {
 		appendTail(task, chunk);
@@ -349,14 +366,14 @@ async function spawnTask(
 	child.stderr?.on("data", writeChunk);
 	child.once("error", (error) => {
 		writeChunk(`\n[spawn error: ${error.message}]\n`);
-		finishTask(pi, task, "failed", 1);
+		finishTask(pi, store, task, "failed", 1);
 	});
 	child.once("close", (code, signal) => {
 		const exitCode = code ?? signalExitCode(signal);
 		if (task.reason) {
-			finishTask(pi, task, "killed", exitCode);
+			finishTask(pi, store, task, "killed", exitCode);
 		} else {
-			finishTask(pi, task, exitCode === 0 ? "completed" : "failed", exitCode);
+			finishTask(pi, store, task, exitCode === 0 ? "completed" : "failed", exitCode);
 		}
 	});
 	if (task.killAfterMs !== undefined) {
@@ -368,7 +385,7 @@ async function spawnTask(
 			const msg = `\n[${reason}; task killed]\n`;
 			appendTail(task, msg);
 			if (!stream.writableEnded && !stream.destroyed) stream.write(msg);
-			requestKill(pi, task, reason);
+			requestKill(pi, store, task, reason);
 		}, task.killAfterMs);
 		task.killTimer.unref();
 	}
@@ -415,14 +432,14 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
 	return signal ? 128 : 1;
 }
 
-function pruneCompletedTasks(): void {
-	const completed = [...tasks.values()]
+function pruneCompletedTasks(store: BashTaskStore): void {
+	const completed = [...store.tasks.values()]
 		.filter((task) => task.status !== "running")
 		.sort((a, b) => a.startedAt - b.startedAt);
 	while (completed.length > MAX_COMPLETED_TASKS) {
 		const task = completed.shift();
 		if (!task) break;
-		tasks.delete(task.taskId);
+		store.tasks.delete(task.taskId);
 		void rm(path.dirname(task.outputPath), { recursive: true, force: true });
 	}
 }
@@ -540,9 +557,9 @@ function bashTaskSnapshot(task: TaskRecord): BashTaskSnapshot {
 	};
 }
 
-function emitBashTaskUpdate(task: TaskRecord): void {
+function emitBashTaskUpdate(store: BashTaskStore, task: TaskRecord): void {
 	const snapshot = bashTaskSnapshot(task);
-	for (const listener of bashTaskSubscribers) listener(snapshot);
+	for (const listener of store.subscribers) listener(snapshot);
 }
 
 function publishAriaLocalBackgroundTask(pi: ExtensionAPI, snapshot: BashTaskSnapshot): void {
@@ -608,16 +625,19 @@ export interface BashTaskManager {
 	list(status?: string): TaskRecord[];
 	readOutput(options: BashTaskReadOptions): Promise<BashTaskReadResult>;
 	stop(taskId: string, reason?: string, waitMs?: number): Promise<TaskRecord>;
+	scheduleUpdate(onUpdate: AgentToolUpdateCallback<{ outputPath: string }> | undefined, task: BashTaskRecord): void;
 	subscribe(listener: BashTaskUpdateListener): () => void;
 	pruneOldTaskDirs(): Promise<void>;
 	shutdown(): Promise<void>;
 }
 
 export function createBashTaskManager(pi: ExtensionAPI): BashTaskManager {
+	const store = createBashTaskStore();
 	return {
 		start(options) {
 			return spawnTask(
 				pi,
+				store,
 				options.command,
 				options.cwd,
 				options.backgroundAfterSeconds,
@@ -626,10 +646,10 @@ export function createBashTaskManager(pi: ExtensionAPI): BashTaskManager {
 			);
 		},
 		get(taskId) {
-			return tasks.get(taskId);
+			return store.tasks.get(taskId);
 		},
 		list(status) {
-			let allTasks = [...tasks.values()];
+			let allTasks = [...store.tasks.values()];
 			if (status) allTasks = allTasks.filter((task) => task.status === status);
 			allTasks.sort((a, b) => {
 				if (a.status === "running" && b.status !== "running") return -1;
@@ -639,7 +659,7 @@ export function createBashTaskManager(pi: ExtensionAPI): BashTaskManager {
 			return allTasks;
 		},
 		async readOutput(options) {
-			const task = tasks.get(options.taskId);
+			const task = store.tasks.get(options.taskId);
 			if (!task) {
 				throw new Error(
 					`Unknown background bash task id: ${options.taskId}. Use bash_tasks to list live tasks in this Pi process.`,
@@ -653,7 +673,7 @@ export function createBashTaskManager(pi: ExtensionAPI): BashTaskManager {
 			return { task, output };
 		},
 		async stop(taskId, reason = "killed by kill_bash", waitMs = 3_000) {
-			const task = tasks.get(taskId);
+			const task = store.tasks.get(taskId);
 			if (!task) {
 				throw new Error(
 					`Unknown background bash task id: ${taskId}. Use bash_tasks to list live tasks in this Pi process.`,
@@ -661,26 +681,29 @@ export function createBashTaskManager(pi: ExtensionAPI): BashTaskManager {
 			}
 			task.notifyOnCompletion = false;
 			if (task.status === "running") {
-				requestKill(pi, task, reason);
+				requestKill(pi, store, task, reason);
 				await Promise.race([task.completion, delay(waitMs)]);
-				emitBashTaskUpdate(task);
+				emitBashTaskUpdate(store, task);
 			}
 			return task;
 		},
+		scheduleUpdate(onUpdate, task) {
+			scheduleUpdate(store, onUpdate, task);
+		},
 		subscribe(listener) {
-			bashTaskSubscribers.add(listener);
-			return () => bashTaskSubscribers.delete(listener);
+			store.subscribers.add(listener);
+			return () => store.subscribers.delete(listener);
 		},
 		pruneOldTaskDirs,
 		async shutdown() {
-			for (const task of tasks.values()) {
+			for (const task of store.tasks.values()) {
 				if (task.status === "running") {
 					task.notifyOnCompletion = false;
-					requestKill(pi, task, "Pi session shutdown");
+					requestKill(pi, store, task, "Pi session shutdown");
 				}
 			}
-			await Promise.race([Promise.allSettled([...tasks.values()].map((task) => task.completion)), delay(2_000)]);
-			for (const task of tasks.values()) {
+			await Promise.race([Promise.allSettled([...store.tasks.values()].map((task) => task.completion)), delay(2_000)]);
+			for (const task of store.tasks.values()) {
 				if (task.status !== "running") {
 					void rm(path.dirname(task.outputPath), { recursive: true, force: true });
 				}
@@ -737,7 +760,7 @@ export default function bashBackgrounding(pi: ExtensionAPI) {
 			}
 			if (signal?.aborted) abort();
 			signal?.addEventListener("abort", abort, { once: true });
-			const updateInterval = setInterval(() => scheduleUpdate(onUpdate, task), 1_000);
+			const updateInterval = setInterval(() => manager.scheduleUpdate(onUpdate, task), 1_000);
 			updateInterval.unref();
 			try {
 				const completion = await Promise.race([task.completion, delay(task.backgroundAfterMs)]);
