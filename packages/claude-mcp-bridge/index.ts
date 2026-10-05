@@ -8,7 +8,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Type } from "@sinclair/typebox";
 
 export type RawMcpServer = {
 	type?: string;
@@ -1252,70 +1251,10 @@ export function formatToolResult(result: unknown): FormattedToolResult {
 	return { text: JSON.stringify(result, null, 2), imagePaths };
 }
 
-type JsonSchemaProp = {
-	type?: string;
-	description?: string;
-	enum?: unknown[];
-	items?: { type?: string };
-};
-
-/**
- * Map a single JSON Schema property to the appropriate TypeBox type.
- * Preserves type, description, and enum information so the LLM receives
- * accurate type hints and the framework can validate/coerce values.
- */
-function mapPropertyType(prop: JsonSchemaProp): ReturnType<typeof Type.Any> {
-	const opts: Record<string, unknown> = {};
-	if (typeof prop.description === "string") opts.description = prop.description;
-
-	switch (prop.type) {
-		case "string":
-			if (Array.isArray(prop.enum) && prop.enum.every((v): v is string => typeof v === "string")) {
-				return Type.Union(
-					prop.enum.map((v) => Type.Literal(v)),
-					opts,
-				) as unknown as ReturnType<typeof Type.Any>;
-			}
-			return Type.String(opts) as unknown as ReturnType<typeof Type.Any>;
-		case "boolean":
-			return Type.Boolean(opts) as unknown as ReturnType<typeof Type.Any>;
-		case "number":
-			return Type.Number(opts) as unknown as ReturnType<typeof Type.Any>;
-		case "integer":
-			return Type.Integer(opts) as unknown as ReturnType<typeof Type.Any>;
-		case "array":
-			return Type.Array(Type.Any(), opts) as unknown as ReturnType<typeof Type.Any>;
-		default:
-			return Type.Any(opts);
-	}
-}
-
-export function createParameterSchema(inputSchema: Record<string, unknown>): ReturnType<typeof Type.Object> {
-	const schema = inputSchema as {
-		type?: string;
-		properties?: Record<string, JsonSchemaProp>;
-		required?: string[];
-	};
-
-	if (schema.type !== "object" || !schema.properties) {
-		return Type.Object({});
-	}
-
-	const required = new Set(schema.required ?? []);
-	const properties: Record<string, ReturnType<typeof Type.Any>> = {};
-
-	for (const [key, prop] of Object.entries(schema.properties)) {
-		const base = mapPropertyType(prop);
-
-		if (required.has(key)) {
-			properties[key] = base;
-		} else {
-			properties[key] = Type.Optional(base) as unknown as ReturnType<typeof Type.Any>;
-		}
-	}
-
-	return Type.Object(properties, { additionalProperties: true });
-}
+// Pi validates and sends plain JSON Schema tool parameters as they are, so MCP
+// input schemas pass through unchanged: nested objects, unions, references and
+// array item types reach the model and Pi's argument validation intact.
+type ToolParameters = Parameters<ExtensionAPI["registerTool"]>[0]["parameters"];
 
 function summarizeToolCallArgs(args: Record<string, unknown>, theme: Theme): string {
 	const entries = Object.entries(args).filter(([, value]) => value !== undefined && value !== null);
@@ -2017,7 +1956,7 @@ export default function claudeMcpBridge(pi: ExtensionAPI) {
 				name: piToolName,
 				label: `MCP ${serverName}/${tool.name}`,
 				description: tool.description ?? `MCP tool ${serverName}/${tool.name}`,
-				parameters: createParameterSchema(tool.inputSchema),
+				parameters: tool.inputSchema as unknown as ToolParameters,
 
 				renderCall(args, theme) {
 					return renderMcpToolCall(serverName, tool.name, args, theme);

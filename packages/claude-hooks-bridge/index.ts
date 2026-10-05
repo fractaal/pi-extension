@@ -265,7 +265,7 @@ function getLastAssistantMessage(ctx: ExtensionContext): string | undefined {
 	const entries = ctx.sessionManager.getEntries();
 	for (let i = entries.length - 1; i >= 0; i -= 1) {
 		const entry = entries[i];
-		if (!entry || entry.type !== "message") continue;
+		if (entry?.type !== "message") continue;
 		if (entry.message.role !== "assistant") continue;
 		const text = extractTextFromBlocks(entry.message.content);
 		if (text) return text;
@@ -340,7 +340,7 @@ function toClaudeTranscriptLines(ctx: ExtensionContext): string[] {
 	const entries = ctx.sessionManager.getEntries();
 
 	for (const entry of entries) {
-		if (!entry || entry.type !== "message") continue;
+		if (entry?.type !== "message") continue;
 		const line = mapTranscriptLine(entry.message as { role: string; content: unknown; toolCallId?: string });
 		if (line) lines.push(line);
 	}
