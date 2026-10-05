@@ -526,7 +526,7 @@ function collapseTreeNode(node, isRoot = false) {
 
 	while (collapsed.children.size === 1) {
 		const [onlyChild] = collapsed.children.values();
-		if (!onlyChild || onlyChild.kind !== "dir") break;
+		if (onlyChild?.kind !== "dir") break;
 		collapsed = {
 			name: `${collapsed.name}/${onlyChild.name}`,
 			path: onlyChild.path,
@@ -1241,7 +1241,7 @@ function renderCommentDOM(comment, onDelete) {
 }
 
 function canCommentOnSide(file, side) {
-	if (!file || file.kind !== "text") return false;
+	if (file?.kind !== "text") return false;
 	const comparison = activeComparison();
 	if (side === "original") {
 		return comparison?.hasOriginal ?? false;

@@ -138,7 +138,7 @@ export async function startSetup(cwd: string, mode: StartMode): Promise<StartRes
 
 export async function cancelSetup(context: SetupContext): Promise<string> {
 	const record = await finalizeRunIfNeeded(context);
-	if (!record || record.status !== "running") return "실행 중인 setup.sh가 없습니다.";
+	if (record?.status !== "running") return "실행 중인 setup.sh가 없습니다.";
 	if (!isPidAlive(record.pid)) {
 		await finalizeRunIfNeeded(context);
 		return "setup.sh 프로세스가 이미 종료되었습니다.";
