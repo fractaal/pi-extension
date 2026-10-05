@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { createExtensionApiMock } from "../../tests/mock-extension-api.ts";
 import claudeMcpBridge, {
 	buildPiToolName,
 	buildToolVisibilityKey,
-	createParameterSchema,
 	expandEnvVars,
 	extractRawServers,
 	formatToolResult,
@@ -640,118 +640,61 @@ describe("mimeToExt", () => {
 });
 
 // ---------------------------------------------------------------------------
-// createParameterSchema — JSON Schema to TypeBox conversion
+// discovered MCP tools
 // ---------------------------------------------------------------------------
 
-describe("createParameterSchema", () => {
-	it("should return empty Object for non-object schema type", () => {
-		const schema = createParameterSchema({ type: "string" });
-		expect(schema.type).toBe("object");
-		expect(Object.keys(schema.properties)).toHaveLength(0);
-	});
-
-	it("should return empty Object for schema without properties", () => {
-		const schema = createParameterSchema({ type: "object" });
-		expect(schema.type).toBe("object");
-		expect(Object.keys(schema.properties)).toHaveLength(0);
-	});
-
-	it("should convert string property", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { name: { type: "string", description: "A name" } },
-			required: ["name"],
-		});
-		expect(schema.properties.name).toBeDefined();
-		expect(schema.properties.name.type).toBe("string");
-		expect(schema.properties.name.description).toBe("A name");
-	});
-
-	it("should convert boolean property", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { flag: { type: "boolean" } },
-			required: ["flag"],
-		});
-		expect(schema.properties.flag.type).toBe("boolean");
-	});
-
-	it("should convert number property", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { count: { type: "number" } },
-			required: ["count"],
-		});
-		expect(schema.properties.count.type).toBe("number");
-	});
-
-	it("should convert integer property", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { count: { type: "integer" } },
-			required: ["count"],
-		});
-		expect(schema.properties.count.type).toBe("integer");
-	});
-
-	it("should convert array property", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { items: { type: "array" } },
-			required: ["items"],
-		});
-		expect(schema.properties.items.type).toBe("array");
-	});
-
-	it("should handle string enum via union of literals", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { mode: { type: "string", enum: ["fast", "slow"] } },
-			required: ["mode"],
-		});
-		const modeProp = schema.properties.mode;
-		expect(modeProp).toBeDefined();
-		expect(modeProp.anyOf).toBeDefined();
-		expect(modeProp.anyOf).toHaveLength(2);
-	});
-
-	it("should mark non-required properties as optional", () => {
-		const schema = createParameterSchema({
+describe("discovered MCP tools", () => {
+	it("registers each tool with the server's input schema unchanged", async () => {
+		const inputSchema = {
 			type: "object",
 			properties: {
-				required_prop: { type: "string" },
-				optional_prop: { type: "string" },
+				change: {
+					anyOf: [
+						{
+							type: "object",
+							properties: { operation: { type: "string", const: "delete_grant" }, grant_id: { type: "string" } },
+							required: ["operation", "grant_id"],
+						},
+						{
+							type: "object",
+							properties: { operation: { type: "string", const: "merge_identity" }, kept_id: { type: "string" } },
+							required: ["operation", "kept_id"],
+						},
+					],
+				},
+				labels: { type: "array", items: { type: "string", enum: ["urgent", "routine"] } },
 			},
-			required: ["required_prop"],
-		});
-		expect(schema.required).toContain("required_prop");
-		expect(schema.required).not.toContain("optional_prop");
-	});
+			required: ["change"],
+			additionalProperties: false,
+		};
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-bridge-test-"));
+		const configPath = path.join(tmpDir, "mcp.json");
+		const fixture = path.join(import.meta.dirname, "test-fixtures", "nested-schema-server.mjs");
+		const originalConfig = process.env.PI_MCP_CONFIG;
+		fs.writeFileSync(
+			configPath,
+			JSON.stringify({
+				mcpServers: { fixture: { command: process.execPath, args: [fixture, JSON.stringify(inputSchema)] } },
+			}),
+			"utf-8",
+		);
+		process.env.PI_MCP_CONFIG = configPath;
+		const mock = createExtensionApiMock();
+		const ctx = { cwd: tmpDir, hasUI: false, ui: { notify() {}, setStatus() {} } } as unknown as ExtensionContext;
 
-	it("should set additionalProperties to true", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { a: { type: "string" } },
-		});
-		expect(schema.additionalProperties).toBe(true);
-	});
+		try {
+			claudeMcpBridge(mock.api);
+			for (const handler of mock.getHandlers("session_start")) await handler({ reason: "new" }, ctx);
+			const deadline = Date.now() + 10_000;
+			while (mock.tools.size === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
 
-	it("should handle unknown property types as Any", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { data: {} },
-			required: ["data"],
-		});
-		expect(schema.properties.data).toBeDefined();
-	});
-
-	it("should preserve description on any property type", () => {
-		const schema = createParameterSchema({
-			type: "object",
-			properties: { x: { type: "boolean", description: "toggle" } },
-			required: ["x"],
-		});
-		expect(schema.properties.x.description).toBe("toggle");
+			expect(mock.getTool(buildPiToolName("fixture", "apply_change")).parameters).toEqual(inputSchema);
+		} finally {
+			for (const handler of mock.getHandlers("session_shutdown")) await handler({}, ctx);
+			if (originalConfig === undefined) delete process.env.PI_MCP_CONFIG;
+			else process.env.PI_MCP_CONFIG = originalConfig;
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });
 
